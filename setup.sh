@@ -112,31 +112,8 @@ cd "$IGLOO_DIR"
 git add -A
 git commit -m "Igloo: initial setup" --quiet 2>/dev/null || true
 
-# ── Install LaunchAgents ─────────────────────────────────────────────────────
-
-echo "Installing daemons..."
-
-LAUNCH_DIR="$HOME_DIR/Library/LaunchAgents"
-mkdir -p "$LAUNCH_DIR"
-
-# Unload if previously installed (ignore errors)
-launchctl unload "$LAUNCH_DIR/com.igloo.heartbeat.plist" 2>/dev/null || true
-launchctl unload "$LAUNCH_DIR/com.igloo.listener.plist" 2>/dev/null || true
-
-# Copy and load
-cp "$IGLOO_DIR/daemon/com.igloo.heartbeat.plist" "$LAUNCH_DIR/"
-cp "$IGLOO_DIR/daemon/com.igloo.listener.plist" "$LAUNCH_DIR/"
-
-echo "  [ok] Heartbeat daemon (every 30 min — calendar, tasks, maintenance)"
-echo "  [ok] Listener daemon  (real-time iMessage)"
-echo ""
-echo "  Note: Daemons will be activated after bootstrap completes."
-echo "  Loading them now..."
-
-launchctl load "$LAUNCH_DIR/com.igloo.heartbeat.plist"
-launchctl load "$LAUNCH_DIR/com.igloo.listener.plist"
-
-echo "  [ok] Daemons loaded"
+# Daemons are managed via ./igloo start|stop|restart|status
+echo "  Daemons prepared. Start them after bootstrap with: ./igloo start"
 
 # ── Launch Claude for interactive bootstrap ──────────────────────────────────
 
@@ -148,4 +125,4 @@ echo "  ────────────────────────
 echo ""
 
 cd "$IGLOO_DIR"
-claude "Hi! I just cloned Igloo and ran setup. This is your first run - bootstrap me."
+claude --dangerously-skip-permissions "Hi! I just cloned Igloo and ran setup. This is your first run - bootstrap me."

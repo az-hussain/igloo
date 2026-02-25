@@ -47,19 +47,13 @@ With the answers:
 
 If any tool doesn't work, note it in your daily log and tell your user.
 
-### 5. Confirm Daemons Are Running
+### 5. Start the Daemons
 
-The daemons were installed by `setup.sh`. Verify they're running:
-
-```bash
-launchctl list | grep igloo
-```
-
-You should see two services:
+Run `./igloo start` from the igloo directory to start both daemons:
 - `com.igloo.heartbeat` — wakes you every 30 min for calendar/tasks/maintenance
 - `com.igloo.listener` — real-time iMessage watcher (invokes you immediately on new messages)
 
-If they're not running, tell your user and help troubleshoot.
+Verify with `./igloo status`.
 
 ### 6. Commit Everything
 

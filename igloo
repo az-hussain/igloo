@@ -1,0 +1,88 @@
+#!/bin/bash
+set -euo pipefail
+
+IGLOO_DIR="$(cd "$(dirname "$0")" && pwd)"
+LAUNCH_DIR="$HOME/Library/LaunchAgents"
+HEARTBEAT_PLIST="com.igloo.heartbeat.plist"
+LISTENER_PLIST="com.igloo.listener.plist"
+
+usage() {
+    echo "Usage: igloo <command>"
+    echo ""
+    echo "Commands:"
+    echo "  start     Start heartbeat and listener daemons"
+    echo "  stop      Stop heartbeat and listener daemons"
+    echo "  restart   Restart daemons"
+    echo "  status    Show daemon status"
+    echo "  logs      Tail daemon logs"
+    echo "  chat      Start interactive Claude session"
+    echo ""
+}
+
+do_stop() {
+    launchctl unload "$LAUNCH_DIR/$HEARTBEAT_PLIST" 2>/dev/null && echo "  Heartbeat stopped" || echo "  Heartbeat not running"
+    launchctl unload "$LAUNCH_DIR/$LISTENER_PLIST" 2>/dev/null && echo "  Listener stopped" || echo "  Listener not running"
+}
+
+do_start() {
+    # Ensure plists are generated
+    if [ ! -f "$IGLOO_DIR/daemon/$HEARTBEAT_PLIST" ] || [ ! -f "$IGLOO_DIR/daemon/$LISTENER_PLIST" ]; then
+        echo "Error: Daemon plists not found. Run ./setup.sh first."
+        exit 1
+    fi
+
+    # Stop if already running
+    launchctl unload "$LAUNCH_DIR/$HEARTBEAT_PLIST" 2>/dev/null || true
+    launchctl unload "$LAUNCH_DIR/$LISTENER_PLIST" 2>/dev/null || true
+
+    # Copy and load
+    mkdir -p "$LAUNCH_DIR"
+    cp "$IGLOO_DIR/daemon/$HEARTBEAT_PLIST" "$LAUNCH_DIR/"
+    cp "$IGLOO_DIR/daemon/$LISTENER_PLIST" "$LAUNCH_DIR/"
+    launchctl load "$LAUNCH_DIR/$HEARTBEAT_PLIST"
+    launchctl load "$LAUNCH_DIR/$LISTENER_PLIST"
+
+    echo "  Heartbeat started (every 30 min)"
+    echo "  Listener started (real-time iMessage)"
+}
+
+do_status() {
+    echo "Daemons:"
+    if launchctl list | grep -q com.igloo.heartbeat; then
+        echo "  Heartbeat: running"
+    else
+        echo "  Heartbeat: stopped"
+    fi
+    if launchctl list | grep -q com.igloo.listener; then
+        echo "  Listener:  running"
+    else
+        echo "  Listener:  stopped"
+    fi
+    echo ""
+    echo "Logs:"
+    for log in "$IGLOO_DIR/daemon/"*.log; do
+        if [ -f "$log" ]; then
+            echo "  $(basename "$log"): $(wc -l < "$log" | tr -d ' ') lines, $(du -h "$log" | cut -f1)"
+        fi
+    done
+}
+
+do_logs() {
+    tail -f "$IGLOO_DIR/daemon/"*.log
+}
+
+do_chat() {
+    cd "$IGLOO_DIR"
+    shift_args="${1:-}"
+    claude --dangerously-skip-permissions $shift_args
+}
+
+case "${1:-}" in
+    start)   do_start ;;
+    stop)    do_stop ;;
+    restart) do_stop; sleep 1; do_start ;;
+    status)  do_status ;;
+    logs)    do_logs ;;
+    chat)    do_chat ;;
+    *)       usage ;;
+esac
