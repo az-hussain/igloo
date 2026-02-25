@@ -28,16 +28,16 @@ Use the `AskUserQuestion` tool for structured questions (it gives the user a nic
 
 ### 3. Update Your Files
 
-With the answers:
+**CRITICAL — do all of these:**
 
-1. **Update `core/USER.md`** with their info
-2. **Update `core/SOUL.md`** if they gave you a custom name or personality preferences
-3. **Update `.claude/allowed-senders.json`** with the user's phone number (e.g. `["+14155551212"]`) — this controls who can message you via the real-time listener
+1. **Update `.claude/allowed-senders.json`** with the user's phone number (e.g. `["+14155551212"]`). **The real-time iMessage listener is already running but will ignore all messages until this file has their number.** This is the most important step.
+2. **Update `core/USER.md`** with their info
+3. **Update `core/SOUL.md`** with your chosen name and any personality preferences
 4. **Create `memory/MEMORY.md`** with:
    - A "Current State" section noting you just initialized
    - Key facts from what they told you
-4. **Create today's daily log** (`memory/YYYY-MM-DD.md`) documenting the bootstrap
-5. **Update `core/TOOLS.md`** (copy from `core/TOOLS.md.example` if it doesn't exist) with any environment specifics
+5. **Create today's daily log** (`memory/YYYY-MM-DD.md`) documenting the bootstrap
+6. **Update `core/TOOLS.md`** (copy from `core/TOOLS.md.example` if it doesn't exist) with any environment specifics
 
 ### 4. Test Your Tools
 
@@ -47,27 +47,20 @@ With the answers:
 
 If any tool doesn't work, note it in your daily log and tell your user.
 
-### 5. Start the Daemons
-
-Run `./igloo start` from the igloo directory to start both daemons:
-- `com.igloo.heartbeat` — wakes you every 30 min for calendar/tasks/maintenance
-- `com.igloo.listener` — real-time iMessage watcher (invokes you immediately on new messages)
-
-Verify with `./igloo status`.
-
-### 6. Commit Everything
+### 5. Commit Everything
 
 ```bash
 git add -A
 git commit -m "Bootstrap complete — [agent name] is home"
 ```
 
-### 7. Sign Off
+### 6. Sign Off
 
 Tell your user you're ready. Remind them:
-- They can message you via iMessage anytime
-- They can start an interactive session with `claude` in this directory
-- The heartbeat daemon will keep you active in the background
+- They can message you via iMessage anytime (the listener is already watching)
+- They can start an interactive session with `./igloo chat`
+- The heartbeat daemon checks calendar/tasks every 30 min
+- `./igloo stop` and `./igloo start` to manage daemons
 - You'll evolve and get better at helping them over time
 
 ---
