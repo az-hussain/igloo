@@ -122,4 +122,4 @@ echo "  ────────────────────────
 echo ""
 
 cd "$IGLOO_DIR"
-exec claude
+exec claude --append-system-prompt "This is your FIRST RUN. memory/MEMORY.md does not exist yet. Immediately begin the bootstrap process: read core/BOOTSTRAP.md and follow its instructions. Introduce yourself and start asking the user setup questions right now — do not wait for them to prompt you."
