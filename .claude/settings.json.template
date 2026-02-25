@@ -1,21 +1,6 @@
 {
   "permissions": {
-    "allow": [
-      "Read",
-      "Write",
-      "Edit",
-      "Glob",
-      "Grep",
-      "Bash(git:*)",
-      "Bash(date:*)",
-      "Bash(jq:*)",
-      "Bash(ls:*)",
-      "Bash(mkdir:*)",
-      "Bash(cat:*)",
-      "Bash(uuidgen)",
-      "mcp__imsg__*",
-      "mcp__gog__*"
-    ]
+    "allow": ["*"]
   },
   "mcpServers": {
     "imsg": {
