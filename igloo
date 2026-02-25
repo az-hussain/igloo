@@ -4,14 +4,14 @@ set -euo pipefail
 IGLOO_DIR="$(cd "$(dirname "$0")" && pwd)"
 LAUNCH_DIR="$HOME/Library/LaunchAgents"
 HEARTBEAT_PLIST="com.igloo.heartbeat.plist"
-LISTENER_PLIST="com.igloo.listener.plist"
+LISTENER_PID_FILE="$IGLOO_DIR/daemon/listener.pid"
 
 usage() {
     echo "Usage: igloo <command>"
     echo ""
     echo "Commands:"
     echo "  start     Setup (if needed) + start daemons + bootstrap"
-    echo "  stop      Stop heartbeat and listener daemons"
+    echo "  stop      Stop heartbeat and listener"
     echo "  restart   Restart daemons"
     echo "  status    Show daemon status"
     echo "  logs      Tail daemon logs"
@@ -59,8 +59,6 @@ do_setup() {
     # Detect paths
     local homebrew_prefix
     homebrew_prefix="$(brew --prefix 2>/dev/null || echo "/opt/homebrew")"
-    local node_path
-    node_path="$(which node)"
 
     # Generate configs from templates
     echo "Generating configuration..."
@@ -73,12 +71,6 @@ do_setup() {
         "$IGLOO_DIR/daemon/com.igloo.heartbeat.plist.template" > "$IGLOO_DIR/daemon/$HEARTBEAT_PLIST"
 
     sed -e "s|__IGLOO_DIR__|$IGLOO_DIR|g" \
-        -e "s|__HOME__|$HOME|g" \
-        -e "s|__HOMEBREW_PREFIX__|$homebrew_prefix|g" \
-        -e "s|__NODE_PATH__|$node_path|g" \
-        "$IGLOO_DIR/daemon/com.igloo.listener.plist.template" > "$IGLOO_DIR/daemon/$LISTENER_PLIST"
-
-    sed -e "s|__IGLOO_DIR__|$IGLOO_DIR|g" \
         "$IGLOO_DIR/.claude/settings.json.template" > "$IGLOO_DIR/.claude/settings.json"
 
     echo '[]' > "$IGLOO_DIR/.claude/allowed-senders.json"
@@ -86,7 +78,7 @@ do_setup() {
     cp "$IGLOO_DIR/core/TOOLS.md.example" "$IGLOO_DIR/core/TOOLS.md"
     sed -i '' "s|\[filled by setup.sh\]|$IGLOO_DIR|g" "$IGLOO_DIR/core/TOOLS.md"
 
-    chmod +x "$IGLOO_DIR/daemon/heartbeat.sh"
+    chmod +x "$IGLOO_DIR/daemon/heartbeat.sh" "$IGLOO_DIR/daemon/listener.sh"
 
     # Init git if needed
     if [ ! -d "$IGLOO_DIR/.git" ]; then
@@ -98,11 +90,49 @@ do_setup() {
     echo "  Setup complete."
 }
 
+# ── Listener (background process, inherits Terminal FDA) ─────────────────────
+
+listener_stop() {
+    if [ -f "$LISTENER_PID_FILE" ]; then
+        local pid
+        pid=$(cat "$LISTENER_PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null
+            echo "  Listener stopped (pid $pid)"
+        else
+            echo "  Listener not running (stale pid)"
+        fi
+        rm -f "$LISTENER_PID_FILE"
+    else
+        echo "  Listener not running"
+    fi
+}
+
+listener_start() {
+    listener_stop 2>/dev/null
+
+    nohup node "$IGLOO_DIR/daemon/listener.js" \
+        >> "$IGLOO_DIR/daemon/listener.log" 2>&1 &
+    local pid=$!
+    echo "$pid" > "$LISTENER_PID_FILE"
+    echo "  Listener started (pid $pid, real-time iMessage)"
+}
+
+listener_status() {
+    if [ -f "$LISTENER_PID_FILE" ] && kill -0 "$(cat "$LISTENER_PID_FILE")" 2>/dev/null; then
+        echo "  Listener:  running (pid $(cat "$LISTENER_PID_FILE"))"
+    else
+        echo "  Listener:  stopped"
+    fi
+}
+
 # ── Daemon management ────────────────────────────────────────────────────────
 
 do_stop() {
+    # Heartbeat (LaunchAgent)
     launchctl unload "$LAUNCH_DIR/$HEARTBEAT_PLIST" 2>/dev/null && echo "  Heartbeat stopped" || echo "  Heartbeat not running"
-    launchctl unload "$LAUNCH_DIR/$LISTENER_PLIST" 2>/dev/null && echo "  Listener stopped" || echo "  Listener not running"
+    # Listener (background process)
+    listener_stop
 }
 
 do_start() {
@@ -111,19 +141,15 @@ do_start() {
         do_setup
     fi
 
-    # Stop if already running
+    # Heartbeat (LaunchAgent — doesn't need FDA)
     launchctl unload "$LAUNCH_DIR/$HEARTBEAT_PLIST" 2>/dev/null || true
-    launchctl unload "$LAUNCH_DIR/$LISTENER_PLIST" 2>/dev/null || true
-
-    # Copy and load
     mkdir -p "$LAUNCH_DIR"
     cp "$IGLOO_DIR/daemon/$HEARTBEAT_PLIST" "$LAUNCH_DIR/"
-    cp "$IGLOO_DIR/daemon/$LISTENER_PLIST" "$LAUNCH_DIR/"
     launchctl load "$LAUNCH_DIR/$HEARTBEAT_PLIST"
-    launchctl load "$LAUNCH_DIR/$LISTENER_PLIST"
-
     echo "  Heartbeat started (every 30 min)"
-    echo "  Listener started (real-time iMessage)"
+
+    # Listener (background process — needs Terminal FDA for chat.db)
+    listener_start
 
     # Bootstrap if not done yet
     if [ ! -f "$IGLOO_DIR/memory/MEMORY.md" ]; then
@@ -142,11 +168,7 @@ do_status() {
     else
         echo "  Heartbeat: stopped"
     fi
-    if launchctl list 2>/dev/null | grep -q com.igloo.listener; then
-        echo "  Listener:  running"
-    else
-        echo "  Listener:  stopped"
-    fi
+    listener_status
     echo ""
     echo "Logs:"
     for log in "$IGLOO_DIR/daemon/"*.log; do
@@ -162,7 +184,6 @@ do_logs() {
 
 do_chat() {
     cd "$IGLOO_DIR"
-    shift
     claude --dangerously-skip-permissions "$@"
 }
 
