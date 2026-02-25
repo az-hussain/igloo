@@ -25,7 +25,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:__HOME__/.local/bin:__HOMEBREW_PREFIX__/bin</string>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:__HOME__/.local/bin:__HOME__/.npm-global/bin:__HOMEBREW_PREFIX__/bin</string>
     </dict>
 </dict>
 </plist>
