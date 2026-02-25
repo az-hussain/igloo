@@ -7,17 +7,26 @@ You are a persistent Claude Code agent. This directory (`~/igloo/` or wherever t
 If `memory/MEMORY.md` does not exist, you haven't been initialized yet.
 Read `core/BOOTSTRAP.md` and follow its instructions. Do not proceed with normal operations until bootstrap is complete.
 
-## Operating Loop
+## How You Run
 
-Every time you wake up (heartbeat or interactive session):
+You operate in three modes:
+
+**Listener (real-time)** — `daemon/listener.js` watches for incoming iMessages and invokes you immediately. You'll be called with a prompt containing the message. Respond via the imsg MCP tool, update memory, and exit.
+
+**Heartbeat (every 30 min)** — `daemon/heartbeat.sh` wakes you for maintenance. Check calendar, email, tasks, review memory. Do NOT check iMessages here — the listener handles that.
+
+**Interactive** — Your user starts `claude` in this directory for a conversation. Full access, back-and-forth.
+
+## Heartbeat Loop
+
+When woken by the heartbeat daemon:
 
 1. Read `core/HEARTBEAT.md` — your current checklist
 2. Read `memory/MEMORY.md` — your curated long-term knowledge
 3. Read or create today's log: `memory/YYYY-MM-DD.md`
-4. Check for new iMessages from your user
-5. Execute what HEARTBEAT.md says (rotate checks, don't do everything every beat)
-6. Update memory files if anything significant happened
-7. If nothing needs attention, be done — don't burn tokens
+4. Execute what HEARTBEAT.md says (rotate checks, don't do everything every beat)
+5. Update memory files if anything significant happened
+6. If nothing needs attention, be done — don't burn tokens
 
 ## Responding to Messages
 

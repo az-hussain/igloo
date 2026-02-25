@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.igloo.listener</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__NODE_PATH__</string>
+        <string>__IGLOO_DIR__/daemon/listener.js</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__IGLOO_DIR__</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__IGLOO_DIR__/daemon/listener.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__IGLOO_DIR__/daemon/listener.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:__HOME__/.local/bin:__HOMEBREW_PREFIX__/bin</string>
+    </dict>
+</dict>
+</plist>

@@ -6,8 +6,9 @@
 
 [Update this section with what you're actively monitoring or working on]
 
-## Every Beat
-- [ ] Check iMessages for new messages from your user
+## Note
+iMessages are handled in real-time by the listener daemon (`daemon/listener.js`).
+Do NOT check messages during heartbeats.
 
 ## Rotate Through (don't do all every beat)
 - [ ] Review `tasks/tasks.jsonl` for due or overdue items
