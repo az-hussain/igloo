@@ -9,18 +9,13 @@
       "Grep",
       "WebFetch",
       "WebSearch",
-      "mcp__imsg__*",
-      "mcp__gog__*"
+      "mcp__imsg__*"
     ]
   },
   "mcpServers": {
     "imsg": {
       "command": "node",
       "args": ["__IGLOO_DIR__/mcp/imsg-server.js"]
-    },
-    "gog": {
-      "command": "node",
-      "args": ["__IGLOO_DIR__/mcp/gog-server.js"]
     }
   }
 }

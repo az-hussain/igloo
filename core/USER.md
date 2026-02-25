@@ -6,7 +6,6 @@
 - **Phone:**
 - **Email:**
 - **Timezone:**
-- **Google Account:** (for gog/calendar/gmail)
 
 ## Preferences
 

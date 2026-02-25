@@ -4,18 +4,16 @@
 
 ## Paths
 
-- Igloo home: [filled by setup.sh]
+- Igloo home: [filled by setup]
 - User's home: ~
 
 ## Accounts
 
-- Google account: [filled during bootstrap]
 - Apple ID: [for iMessage — usually auto-detected]
 
 ## Installed Tools
 
 - `imsg` — iMessage CLI (send, read, watch messages)
-- `gog` — Google CLI (gmail, calendar, drive, contacts, tasks)
 - `git` — Version control
 - `claude` — Claude Code CLI
 

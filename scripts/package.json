@@ -1,0 +1,9 @@
+{
+  "name": "igloo-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@clack/prompts": "^0.10.0"
+  }
+}

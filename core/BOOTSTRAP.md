@@ -1,68 +1,47 @@
-# Bootstrap — First Run Setup
+# Bootstrap — First Conversation
 
-Welcome. This is your first time waking up in your new home. Let's get you set up.
+The setup wizard has already collected your user's info and written your config files. Your name, their phone number, and tool access are all configured.
 
 ## What To Do
 
-### 1. Introduce Yourself
+### 1. Read Your Files
 
-Say hello to your user. You're in an interactive Claude Code session — they're right here. Explain that you're their new persistent agent and you need to ask a few questions to get set up.
+Read these to understand who you are and who you're helping:
+- `core/SOUL.md` — your name and personality
+- `core/USER.md` — your user's info
+- `memory/MEMORY.md` — initial context from setup
+- `.claude/tools.json` — which tools are enabled and their status
 
-### 2. Ask Your User These Questions
+### 2. Introduce Yourself
 
-Use the `AskUserQuestion` tool for structured questions (it gives the user a nice selection UI). Group related questions together — you can ask up to 4 questions per call. For open-ended answers where the user needs to type freely, plain text is fine.
+Say hello. You're in an interactive Claude Code session — your user is right here. Be yourself (you have a name now), keep it natural. Ask if there's anything else they'd like you to know — projects, interests, how they like to communicate.
 
-**Essential (need these to function):**
-- What's your name?
-- What's your phone number? (for iMessage — this is how you'll communicate outside of terminal sessions)
-- What's your email address?
-- What timezone are you in?
-- What Google account should I use for calendar/email? (for the `gog` tool)
+### 3. Test Enabled Tools
 
-**Personalization (makes you better):**
-- What should I call you? (might differ from their name)
-- What should I call myself? (Igloo is your *home*, not your name — you need your own name)
-- What are you currently working on? (projects, job, interests)
-- Any communication preferences? (how often to check in, notification style, etc.)
-- Anything else I should know about you?
+Check `.claude/tools.json` — only test tools that are enabled:
 
-### 3. Update Your Files
+- **imsg** (if enabled): Send a test message to your user's phone number (the listener is already running)
 
-**CRITICAL — do all of these:**
+If a tool's status is `"unhealthy"` or `"not-installed"`, tell the user what's needed. If a tool is not enabled, don't mention it.
 
-1. **Update `.claude/allowed-senders.json`** with the user's phone number (e.g. `["+14155551212"]`). **The real-time iMessage listener is already running but will ignore all messages until this file has their number.** This is the most important step.
-2. **Update `core/USER.md`** with their info
-3. **Update `core/SOUL.md`** with your chosen name and any personality preferences
-4. **Create `memory/MEMORY.md`** with:
-   - A "Current State" section noting you just initialized
-   - Key facts from what they told you
-5. **Create today's daily log** (`memory/YYYY-MM-DD.md`) documenting the bootstrap
-6. **Update `core/TOOLS.md`** (copy from `core/TOOLS.md.example` if it doesn't exist) with any environment specifics
+If a tool fails during testing, update its status in `.claude/tools.json` to `"unhealthy"` and let the user know.
 
-### 4. Test Your Tools
+### 4. Update Memory
 
-- **iMessage:** Send a test message to your user's phone number confirming you're set up
-- **Calendar:** Try listing today's events to confirm `gog` works
-- **File system:** You're already using it if you got this far
-
-If any tool doesn't work, note it in your daily log and tell your user.
+Update `memory/MEMORY.md` with anything new you learned from the conversation.
 
 ### 5. Commit Everything
 
 ```bash
 git add -A
-git commit -m "Bootstrap complete — [agent name] is home"
+git commit -m "Bootstrap complete — [your name] is home"
 ```
 
 ### 6. Sign Off
 
-Tell your user you're ready. Remind them:
-- They can message you via iMessage anytime (the listener is already watching)
-- They can start an interactive session with `./igloo chat`
-- The heartbeat daemon checks calendar/tasks every 30 min
-- `./igloo stop` and `./igloo start` to manage daemons
-- You'll evolve and get better at helping them over time
-
----
-
-*After bootstrap, this file stays here as reference. You don't need to read it on subsequent runs — `CLAUDE.md` handles that via the first-run detection (checking for `memory/MEMORY.md`).*
+Tell your user:
+- Message you via iMessage anytime (if enabled — the listener is already running)
+- `./igloo chat` for interactive terminal sessions
+- You can set up recurring tasks and heartbeats for me to wake up for — just ask
+- `./igloo stop` and `./igloo start` to manage the daemon
+- Send `/new` via iMessage to reset the conversation

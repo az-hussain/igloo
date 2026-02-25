@@ -2,20 +2,68 @@
 set -euo pipefail
 
 IGLOO_DIR="$(cd "$(dirname "$0")" && pwd)"
-LAUNCH_DIR="$HOME/Library/LaunchAgents"
-HEARTBEAT_PLIST="com.igloo.heartbeat.plist"
 LISTENER_PID_FILE="$IGLOO_DIR/daemon/listener.pid"
+SESSION_ID_FILE="$IGLOO_DIR/.claude/session-id"
+
+TOOLS_FILE="$IGLOO_DIR/.claude/tools.json"
+
+get_session_id() {
+    if [ -f "$SESSION_ID_FILE" ]; then
+        cat "$SESSION_ID_FILE"
+    fi
+}
+
+# Check if a tool is enabled in .claude/tools.json
+tool_enabled() {
+    local tool="$1"
+    if [ -f "$TOOLS_FILE" ]; then
+        [ "$(jq -r ".$tool.enabled" "$TOOLS_FILE" 2>/dev/null)" = "true" ]
+    else
+        return 1
+    fi
+}
+
+# Get tool status from .claude/tools.json
+tool_status() {
+    local tool="$1"
+    if [ -f "$TOOLS_FILE" ]; then
+        jq -r ".$tool.status // \"unknown\"" "$TOOLS_FILE" 2>/dev/null
+    else
+        echo "unknown"
+    fi
+}
+
+# Rotate a log file to .log.old if > 1MB
+rotate_log() {
+    local log_file="$1"
+    if [ -f "$log_file" ] && [ "$(stat -f%z "$log_file" 2>/dev/null || echo 0)" -gt 1048576 ]; then
+        mv "$log_file" "$log_file.old"
+    fi
+}
+
+# Build context injection string from core files (for fresh sessions)
+build_context() {
+    local ctx=""
+    for f in "$IGLOO_DIR/core/SOUL.md" "$IGLOO_DIR/core/USER.md" "$IGLOO_DIR/memory/MEMORY.md"; do
+        if [ -f "$f" ]; then
+            ctx+="$(cat "$f")"$'\n\n'
+        fi
+    done
+    if [ -n "$ctx" ]; then
+        echo "--- Context ---"$'\n'"$ctx""--- End Context ---"$'\n'
+    fi
+}
 
 usage() {
     echo "Usage: igloo <command>"
     echo ""
     echo "Commands:"
     echo "  start     Setup (if needed) + start daemons + bootstrap"
-    echo "  stop      Stop heartbeat and listener"
+    echo "  stop      Stop listener daemon"
     echo "  restart   Restart daemons"
     echo "  status    Show daemon status"
     echo "  logs      Tail daemon logs"
-    echo "  chat      Start interactive Claude session"
+    echo "  chat      Start interactive Claude session (--safe for supervised mode)"
     echo ""
 }
 
@@ -30,8 +78,7 @@ do_setup() {
     for cmd_info in "claude:Claude Code:npm install -g @anthropic-ai/claude-code" \
                     "node:Node.js:https://nodejs.org" \
                     "git:Git:xcode-select --install" \
-                    "imsg:imsg:brew install steipete/tap/imsg" \
-                    "gog:gog:brew install gogcli/tap/gog"; do
+                    "imsg:imsg:brew install steipete/tap/imsg"; do
         IFS=: read -r cmd name hint <<< "$cmd_info"
         if command -v "$cmd" &>/dev/null; then
             echo "  [ok] $name"
@@ -48,17 +95,14 @@ do_setup() {
         [[ $REPLY =~ ^[Yy]$ ]] || exit 1
     fi
 
-    # Create directories
-    mkdir -p "$IGLOO_DIR"/{memory,tasks,workspace,.claude}
-    touch "$IGLOO_DIR/memory/.gitkeep" "$IGLOO_DIR/tasks/.gitkeep" "$IGLOO_DIR/workspace/.gitkeep"
+    # Create .claude directory (the only one not shipped in the repo)
+    mkdir -p "$IGLOO_DIR/.claude"
 
-    # Install MCP dependencies
-    echo "Installing MCP server dependencies..."
+    # Install dependencies
+    echo "Installing dependencies..."
     (cd "$IGLOO_DIR/mcp" && npm install --silent 2>/dev/null)
-
-    # Detect paths
-    local homebrew_prefix
-    homebrew_prefix="$(brew --prefix 2>/dev/null || echo "/opt/homebrew")"
+    (cd "$IGLOO_DIR/scripts" && npm install --silent 2>/dev/null)
+    (cd "$IGLOO_DIR/daemon" && npm install --silent 2>/dev/null)
 
     # Generate configs from templates
     echo "Generating configuration..."
@@ -66,19 +110,18 @@ do_setup() {
         "$IGLOO_DIR/mcp/mcp-config.json.template" > "$IGLOO_DIR/mcp/mcp-config.json"
 
     sed -e "s|__IGLOO_DIR__|$IGLOO_DIR|g" \
-        -e "s|__HOME__|$HOME|g" \
-        -e "s|__HOMEBREW_PREFIX__|$homebrew_prefix|g" \
-        "$IGLOO_DIR/daemon/com.igloo.heartbeat.plist.template" > "$IGLOO_DIR/daemon/$HEARTBEAT_PLIST"
-
-    sed -e "s|__IGLOO_DIR__|$IGLOO_DIR|g" \
         "$IGLOO_DIR/.claude/settings.json.template" > "$IGLOO_DIR/.claude/settings.json"
 
-    echo '[]' > "$IGLOO_DIR/.claude/allowed-senders.json"
+    # allowed-senders.json is NOT created here — null/missing means block all.
+    # Bootstrap will create it with the user's phone number.
+
+    # Generate persistent session ID (all entry points share one session)
+    if [ ! -f "$IGLOO_DIR/.claude/session-id" ]; then
+        uuidgen | tr '[:upper:]' '[:lower:]' > "$IGLOO_DIR/.claude/session-id"
+    fi
 
     cp "$IGLOO_DIR/core/TOOLS.md.example" "$IGLOO_DIR/core/TOOLS.md"
     sed -i '' "s|\[filled by setup.sh\]|$IGLOO_DIR|g" "$IGLOO_DIR/core/TOOLS.md"
-
-    chmod +x "$IGLOO_DIR/daemon/heartbeat.sh" "$IGLOO_DIR/daemon/listener.sh"
 
     # Init git if needed
     if [ ! -d "$IGLOO_DIR/.git" ]; then
@@ -111,11 +154,13 @@ listener_stop() {
 listener_start() {
     listener_stop 2>/dev/null
 
+    rotate_log "$IGLOO_DIR/daemon/listener.log"
+
     nohup node "$IGLOO_DIR/daemon/listener.js" \
         >> "$IGLOO_DIR/daemon/listener.log" 2>&1 &
     local pid=$!
     echo "$pid" > "$LISTENER_PID_FILE"
-    echo "  Listener started (pid $pid, real-time iMessage)"
+    echo "  Listener started (pid $pid, scheduler + iMessage)"
 }
 
 listener_status() {
@@ -129,9 +174,6 @@ listener_status() {
 # ── Daemon management ────────────────────────────────────────────────────────
 
 do_stop() {
-    # Heartbeat (LaunchAgent)
-    launchctl unload "$LAUNCH_DIR/$HEARTBEAT_PLIST" 2>/dev/null && echo "  Heartbeat stopped" || echo "  Heartbeat not running"
-    # Listener (background process)
     listener_stop
 }
 
@@ -141,33 +183,33 @@ do_start() {
         do_setup
     fi
 
-    # Heartbeat (LaunchAgent — doesn't need FDA)
-    launchctl unload "$LAUNCH_DIR/$HEARTBEAT_PLIST" 2>/dev/null || true
-    mkdir -p "$LAUNCH_DIR"
-    cp "$IGLOO_DIR/daemon/$HEARTBEAT_PLIST" "$LAUNCH_DIR/"
-    launchctl load "$LAUNCH_DIR/$HEARTBEAT_PLIST"
-    echo "  Heartbeat started (every 30 min)"
+    local is_bootstrap=false
 
-    # Listener (background process — needs Terminal FDA for chat.db)
+    # First run: CLI onboarding — collect info, test tools, write configs
+    if [ -f "$IGLOO_DIR/core/BOOTSTRAP.md" ]; then
+        is_bootstrap=true
+        node "$IGLOO_DIR/scripts/setup.js"
+    fi
+
+    # Start daemons (scheduler always, iMessage if enabled by setup)
+    rotate_log "$IGLOO_DIR/daemon/listener.log"
     listener_start
 
-    # Bootstrap if not done yet
-    if [ ! -f "$IGLOO_DIR/memory/MEMORY.md" ]; then
-        echo ""
-        echo "  First run detected — launching interactive bootstrap..."
-        echo ""
+    # Bootstrap: first conversation with the agent (daemons already running)
+    if [ "$is_bootstrap" = true ]; then
         cd "$IGLOO_DIR"
-        claude --dangerously-skip-permissions "Hi! I just set up Igloo. This is your first run - bootstrap me."
+        local sid
+        sid=$(get_session_id)
+        claude --session-id "$sid" --dangerously-skip-permissions --chrome \
+            "You've just been configured via the setup wizard. Read core/BOOTSTRAP.md and follow its instructions."
+
+        rm -f "$IGLOO_DIR/core/BOOTSTRAP.md"
+        (cd "$IGLOO_DIR" && git add -A && git commit -m "Bootstrap complete — removed BOOTSTRAP.md" --quiet 2>/dev/null || true)
     fi
 }
 
 do_status() {
     echo "Daemons:"
-    if launchctl list 2>/dev/null | grep -q com.igloo.heartbeat; then
-        echo "  Heartbeat: running"
-    else
-        echo "  Heartbeat: stopped"
-    fi
     listener_status
     echo ""
     echo "Logs:"
@@ -184,7 +226,31 @@ do_logs() {
 
 do_chat() {
     cd "$IGLOO_DIR"
-    claude --dangerously-skip-permissions "$@"
+
+    # --safe flag: run without --dangerously-skip-permissions
+    local perms="--dangerously-skip-permissions"
+    local args=()
+    for arg in "$@"; do
+        if [ "$arg" = "--safe" ] || [ "$arg" = "-safe" ]; then
+            perms=""
+        else
+            args+=("$arg")
+        fi
+    done
+
+    local sid
+    sid=$(get_session_id)
+    if [ -n "$sid" ] && [ ! -f "$IGLOO_DIR/core/BOOTSTRAP.md" ]; then
+        claude --resume "$sid" --fork-session $perms --chrome "${args[@]}"
+    else
+        local ctx
+        ctx=$(build_context)
+        if [ -n "$ctx" ]; then
+            claude $perms --chrome "$ctx"$'\n'"${args[*]}"
+        else
+            claude $perms --chrome "${args[@]}"
+        fi
+    fi
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────

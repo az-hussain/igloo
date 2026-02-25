@@ -1,0 +1,9 @@
+{
+  "name": "igloo-daemons",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "croner": "^10.0.0"
+  }
+}
