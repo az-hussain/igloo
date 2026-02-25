@@ -241,14 +241,14 @@ do_chat() {
     local sid
     sid=$(get_session_id)
     if [ -n "$sid" ] && [ ! -f "$IGLOO_DIR/core/BOOTSTRAP.md" ]; then
-        claude --resume "$sid" --fork-session $perms --chrome "${args[@]}"
+        claude --resume "$sid" --fork-session $perms --chrome "${args[@]+"${args[@]}"}"
     else
         local ctx
         ctx=$(build_context)
         if [ -n "$ctx" ]; then
-            claude $perms --chrome "$ctx"$'\n'"${args[*]}"
+            claude $perms --chrome "$ctx"$'\n'"${args[*]+"${args[*]}"}"
         else
-            claude $perms --chrome "${args[@]}"
+            claude $perms --chrome "${args[@]+"${args[@]}"}"
         fi
     fi
 }
