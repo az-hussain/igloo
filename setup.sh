@@ -148,5 +148,4 @@ echo "  ────────────────────────
 echo ""
 
 cd "$IGLOO_DIR"
-exec claude --mcp-config "$IGLOO_DIR/mcp/mcp-config.json" \
-    "Hi! I just cloned Igloo and ran setup. This is your first run — bootstrap me."
+claude --mcp-config "$IGLOO_DIR/mcp/mcp-config.json" "Hi! I just cloned Igloo and ran setup. This is your first run - bootstrap me."
