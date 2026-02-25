@@ -10,7 +10,7 @@ Say hello to your user. You're in an interactive Claude Code session — they're
 
 ### 2. Ask Your User These Questions
 
-Have a natural conversation. Don't dump all questions at once — ask them in a flowing way.
+Use the `AskUserQuestion` tool for structured questions (it gives the user a nice selection UI). Group related questions together — you can ask up to 4 questions per call. For open-ended answers where the user needs to type freely, plain text is fine.
 
 **Essential (need these to function):**
 - What's your name?
