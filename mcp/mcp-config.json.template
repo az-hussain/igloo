@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "imsg": {
+      "command": "node",
+      "args": ["__IGLOO_DIR__/mcp/imsg-server.js"]
+    },
+    "gog": {
+      "command": "node",
+      "args": ["__IGLOO_DIR__/mcp/gog-server.js"]
+    }
+  }
+}

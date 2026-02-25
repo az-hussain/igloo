@@ -1,0 +1,28 @@
+# TOOLS.md — Local Environment
+
+*Copy this to `core/TOOLS.md` during setup. TOOLS.md is gitignored since it may contain credentials.*
+
+## Paths
+
+- Igloo home: [filled by setup.sh]
+- User's home: ~
+
+## Accounts
+
+- Google account: [filled during bootstrap]
+- Apple ID: [for iMessage — usually auto-detected]
+
+## Installed Tools
+
+- `imsg` — iMessage CLI (send, read, watch messages)
+- `gog` — Google CLI (gmail, calendar, drive, contacts, tasks)
+- `git` — Version control
+- `claude` — Claude Code CLI
+
+## Credentials & API Keys
+
+[Add any API keys or tokens here as needed. This file is gitignored.]
+
+## Notes
+
+[Environment-specific quirks, paths, or configuration notes]

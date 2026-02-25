@@ -1,0 +1,17 @@
+# Machine-specific configs
+.claude/settings.local.json
+core/TOOLS.md
+mcp/mcp-config.json
+daemon/com.igloo.heartbeat.plist
+
+# Daemon logs
+daemon/*.log
+
+# Node
+mcp/node_modules/
+
+# OS
+.DS_Store
+
+# Memory files are tracked (they're the agent's brain)
+# Don't ignore memory/ or tasks/
