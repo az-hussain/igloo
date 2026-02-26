@@ -157,14 +157,14 @@ function dispatch(sender, messages) {
 
     let fullPrompt = prompt;
     if (sid) {
-      args.push("--resume", sid);
+      args.push("--session-id", sid);
     } else {
       // No session yet — inject context for first-ever dispatch
       fullPrompt = buildContext() + prompt;
     }
 
     args.push(fullPrompt);
-    log(`SPAWN: claude --resume ${sid || "(no session)"}`);
+    log(`SPAWN: claude --session-id ${sid || "(no session)"}`);
 
     const claude = spawn("claude", args, {
       cwd: IGLOO_DIR,
@@ -221,7 +221,7 @@ function dispatchSchedule(schedule) {
     try {
       sid = readFileSync(SESSION_ID_FILE, "utf8").trim();
     } catch {}
-    if (sid) args.push("--resume", sid);
+    if (sid) args.push("--session-id", sid);
     args.push(prompt);
 
     const startMs = Date.now();
