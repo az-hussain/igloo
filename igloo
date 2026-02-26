@@ -50,7 +50,7 @@ build_context() {
         fi
     done
     if [ -n "$ctx" ]; then
-        echo "--- Context ---"$'\n'"$ctx""--- End Context ---"$'\n'
+        echo "[Context]"$'\n'"$ctx""[End Context]"$'\n'
     fi
 }
 

@@ -83,7 +83,7 @@ function buildContext() {
     } catch {}
   }
   if (context) {
-    return `--- Context ---\n${context}--- End Context ---\n\n`;
+    return `[Context]\n${context}[End Context]\n\n`;
   }
   return "";
 }
