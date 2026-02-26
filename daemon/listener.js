@@ -68,7 +68,7 @@ function isAllowed(sender) {
   );
 }
 
-// ── Context injection for fresh sessions ────────────────────────────────────
+// ── Session management ──────────────────────────────────────────────────────
 
 function buildContext() {
   let context = "";
@@ -86,6 +86,21 @@ function buildContext() {
     return `[Context]\n${context}[End Context]\n\n`;
   }
   return "";
+}
+
+/**
+ * Get existing session ID, or create a new one if none exists.
+ * Returns { id, isNew } — isNew means the session needs to be created (use --session-id).
+ * Existing sessions should be resumed (use --resume).
+ */
+function getOrCreateSessionId() {
+  try {
+    const id = readFileSync(SESSION_ID_FILE, "utf8").trim();
+    if (id) return { id, isNew: false };
+  } catch {}
+  const id = crypto.randomUUID();
+  writeFileSync(SESSION_ID_FILE, id);
+  return { id, isNew: true };
 }
 
 // ── Serial queue (messages + scheduled tasks) ───────────────────────────────
@@ -149,22 +164,18 @@ function dispatch(sender, messages) {
 
     const args = ["--print", "--dangerously-skip-permissions", "--chrome"];
 
-    // Always resume the persistent session
-    let sid = null;
-    try {
-      sid = readFileSync(SESSION_ID_FILE, "utf8").trim();
-    } catch {}
-
+    const { id: sid, isNew } = getOrCreateSessionId();
     let fullPrompt = prompt;
-    if (sid) {
+    if (isNew) {
+      // First dispatch for this session — create it, inject context
       args.push("--session-id", sid);
-    } else {
-      // No session yet — inject context for first-ever dispatch
       fullPrompt = buildContext() + prompt;
+    } else {
+      args.push("--resume", sid);
     }
 
     args.push(fullPrompt);
-    log(`SPAWN: claude --session-id ${sid || "(no session)"}`);
+    log(`SPAWN: claude ${isNew ? "--session-id" : "--resume"} ${sid}`);
 
     const claude = spawn("claude", args, {
       cwd: IGLOO_DIR,
@@ -217,11 +228,12 @@ function dispatchSchedule(schedule) {
     log(`SCHEDULE [${schedule.id}]: ${schedule.name}`);
 
     const args = ["--print", "--dangerously-skip-permissions", "--chrome"];
-    let sid = null;
-    try {
-      sid = readFileSync(SESSION_ID_FILE, "utf8").trim();
-    } catch {}
-    if (sid) args.push("--session-id", sid);
+    const { id: sid, isNew } = getOrCreateSessionId();
+    if (isNew) {
+      args.push("--session-id", sid);
+    } else {
+      args.push("--resume", sid);
+    }
     args.push(prompt);
 
     const startMs = Date.now();
@@ -380,8 +392,6 @@ function handleMessage(params) {
   // Handle /new command — reset session
   if (text.trim() === "/new") {
     try { unlinkSync(SESSION_ID_FILE); } catch {}
-    const newId = crypto.randomUUID();
-    writeFileSync(SESSION_ID_FILE, newId);
     log("NEW SESSION: reset by user command");
     spawn("imsg", ["send", "--to", sender, "--text", "Session reset. Next message starts fresh."]);
     return;
