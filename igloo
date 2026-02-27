@@ -612,17 +612,14 @@ do_connect() {
 
     # 2. Symlink igloo CLI into target user's ~/.local/bin
     local bin_dir="$target_home/.local/bin"
-    mkdir -p "$bin_dir" 2>/dev/null || true
     if [ -L "$bin_dir/igloo" ]; then
         echo "  [ok] $bin_dir/igloo (already linked)"
     elif [ -e "$bin_dir/igloo" ]; then
         echo "  [!!] $bin_dir/igloo already exists — skipping"
-    elif [ -d "$bin_dir" ]; then
-        ln -s "$CODE_DIR/igloo" "$bin_dir/igloo"
-        echo "  [ok] Symlinked → $bin_dir/igloo"
     else
-        echo "  [!!] Could not create $bin_dir — tell $target_user to run:"
-        echo "       ln -s $CODE_DIR/igloo ~/.local/bin/igloo"
+        sudo -u "$target_user" mkdir -p "$bin_dir"
+        sudo -u "$target_user" ln -s "$CODE_DIR/igloo" "$bin_dir/igloo"
+        echo "  [ok] Symlinked → $bin_dir/igloo"
     fi
 
     # 3. Add IGLOO_HOME to target user's shell profile
@@ -634,12 +631,10 @@ do_connect() {
     fi
     if grep -q "IGLOO_HOME" "$shell_rc" 2>/dev/null; then
         echo "  [ok] IGLOO_HOME already in $(basename "$shell_rc")"
-    elif [ -w "$shell_rc" ] || [ ! -f "$shell_rc" ]; then
-        echo "export IGLOO_HOME=$IGLOO_HOME" >> "$shell_rc"
-        echo "  [ok] Added IGLOO_HOME to $(basename "$shell_rc")"
     else
-        echo "  [!!] Can't write to $shell_rc — tell $target_user to add:"
-        echo "       export IGLOO_HOME=$IGLOO_HOME"
+        sudo sh -c "echo 'export IGLOO_HOME=$IGLOO_HOME' >> $shell_rc"
+        sudo chown "$target_user" "$shell_rc"
+        echo "  [ok] Added IGLOO_HOME to $(basename "$shell_rc")"
     fi
 
     echo ""
