@@ -328,7 +328,7 @@ do_start() {
         cd "$IGLOO_HOME"
         local sid
         sid=$(get_session_id)
-        claude --session-id "$sid" --dangerously-skip-permissions --chrome \
+        claude --session-id "$sid" --chrome \
             "You've just been configured via the setup wizard. Read core/BOOTSTRAP.md and follow its instructions."
 
         rm -f "$IGLOO_HOME/core/BOOTSTRAP.md"
@@ -369,7 +369,7 @@ do_chat() {
         cd "$IGLOO_HOME"
         local sid
         sid=$(get_session_id)
-        claude --session-id "$sid" --dangerously-skip-permissions --chrome \
+        claude --session-id "$sid" --chrome \
             "You've just been configured via the setup wizard. Read core/BOOTSTRAP.md and follow its instructions."
         rm -f "$IGLOO_HOME/core/BOOTSTRAP.md"
         (cd "$IGLOO_HOME" && git add -A && git commit -m "Bootstrap complete — removed BOOTSTRAP.md" --quiet 2>/dev/null || true)
