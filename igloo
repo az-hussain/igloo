@@ -77,8 +77,27 @@ build_context() {
     fi
 }
 
+banner() {
+    local version="unknown"
+    if [ -f "$CODE_DIR/VERSION" ]; then
+        version=$(cat "$CODE_DIR/VERSION")
+    fi
+    cat << EOF
+        ___
+      /|_|_|\\           igloo v${version}
+     |_|_|_|_|          Persistent Agent
+     |_|   |_|          ${IGLOO_HOME/#$HOME/~}
+        ‾‾‾
+EOF
+}
+
 usage() {
-    echo "Usage: igloo <command>"
+    banner
+    echo "Usage: igloo [command] [flags]"
+    echo ""
+    echo "  igloo                Start session (in current dir, or home if in IGLOO_HOME)"
+    echo "  igloo --home         Force session from igloo home directory"
+    echo "  igloo --danger       Start session with permissions bypassed"
     echo ""
     echo "Commands:"
     echo "  start     Setup (if needed) + start daemons + bootstrap"
@@ -86,10 +105,11 @@ usage() {
     echo "  restart   Restart daemons"
     echo "  status    Show daemon status"
     echo "  logs      Tail daemon logs"
-    echo "  chat      Start interactive Claude session (--safe for supervised mode)"
     echo "  upgrade   Pull latest code, update configs, restart"
     echo "  migrate   Migrate existing single-dir instance to two-dir layout"
+    echo "  connect   Grant another user access (connect <username>)"
     echo "  version   Show version and paths"
+    echo "  help      Show this help"
     echo ""
 }
 
@@ -292,6 +312,7 @@ do_start() {
 }
 
 do_status() {
+    banner
     echo "Daemons:"
     listener_status
     echo ""
@@ -314,26 +335,89 @@ do_logs() {
 }
 
 do_chat() {
-    cd "$IGLOO_HOME"
-
-    # --safe flag: run without --dangerously-skip-permissions
-    local perms="--dangerously-skip-permissions"
+    # Parse flags
+    local perms=""
+    local here=false
     local args=()
     for arg in "$@"; do
-        if [ "$arg" = "--safe" ] || [ "$arg" = "-safe" ]; then
-            perms=""
-        else
-            args+=("$arg")
-        fi
+        case "$arg" in
+            --danger|--dangerously-skip-permissions) perms="--dangerously-skip-permissions" ;;
+            --here|-here) here=true ;;
+            --home) here=false ;;
+            *) args+=("$arg") ;;
+        esac
     done
+
+    # Auto-detect: if not in IGLOO_HOME, default to --here
+    if [ "$here" = false ] && [ "$(pwd)" != "$IGLOO_HOME" ]; then
+        here=true
+    fi
 
     local sid
     sid=$(get_session_id)
-    if [ -n "$sid" ] && [ ! -f "$IGLOO_HOME/core/BOOTSTRAP.md" ]; then
-        claude --session-id "$sid" --fork-session $perms --chrome "${args[@]+"${args[@]}"}"
+
+    if [ "$here" = true ]; then
+        # Remote mode: stay in current directory, inject igloo's config
+        # Resolve the remote code dir from IGLOO_HOME (may differ from local CODE_DIR)
+        local remote_code_dir="$CODE_DIR"
+        if [ -f "$IGLOO_HOME/.igloo-code-dir" ]; then
+            remote_code_dir=$(cat "$IGLOO_HOME/.igloo-code-dir")
+        fi
+
+        # Sync igloo skills into local user's .claude/skills via symlinks
+        local igloo_skills="$IGLOO_HOME/.claude/skills"
+        local local_skills="$HOME/.claude/skills"
+        if [ -d "$igloo_skills" ]; then
+            mkdir -p "$local_skills"
+            for skill_dir in "$igloo_skills"/*/; do
+                [ -d "$skill_dir" ] || continue
+                local skill_name
+                skill_name=$(basename "$skill_dir")
+                [ "$skill_name" = "skills" ] && continue
+                # Symlink if not already present
+                if [ ! -e "$local_skills/$skill_name" ]; then
+                    ln -s "$skill_dir" "$local_skills/$skill_name"
+                fi
+            done
+        fi
+
+        # Build system prompt: CLAUDE.md + path remapping + preloaded context
+        local sys_prompt=""
+        if [ -f "$IGLOO_HOME/CLAUDE.md" ]; then
+            sys_prompt+="$(cat "$IGLOO_HOME/CLAUDE.md")"$'\n\n'
+        fi
+        sys_prompt+="[Igloo Remote Mode] You are running in --here mode. Your home directory is $IGLOO_HOME (not the working directory). All igloo files (memory/, core/, tasks/, workspace/) are at absolute paths under $IGLOO_HOME/. Use absolute paths when reading or writing igloo state."$'\n\n'
+        local ctx
+        ctx=$(build_context)
+        if [ -n "$ctx" ]; then
+            sys_prompt+="$ctx"
+        fi
+
+        local igloo_flags=(
+            --add-dir "$IGLOO_HOME"
+            --settings "$IGLOO_HOME/.claude/settings.json"
+            --append-system-prompt "$sys_prompt"
+        )
+        # Load MCP config if available
+        if [ -f "$remote_code_dir/mcp/mcp-config.json" ]; then
+            igloo_flags+=(--mcp-config "$remote_code_dir/mcp/mcp-config.json")
+        fi
+
+        if [ -n "$sid" ] && [ ! -f "$IGLOO_HOME/core/BOOTSTRAP.md" ]; then
+            claude --session-id "$sid" --fork-session $perms --chrome \
+                "${igloo_flags[@]}" "${args[@]+"${args[@]}"}"
+        else
+            claude $perms --chrome "${igloo_flags[@]}" "${args[@]+"${args[@]}"}"
+        fi
     else
-        # No session yet — start fresh interactive session
-        claude $perms --chrome "${args[@]+"${args[@]}"}"
+        # Local mode: run from IGLOO_HOME (default)
+        cd "$IGLOO_HOME"
+
+        if [ -n "$sid" ] && [ ! -f "$IGLOO_HOME/core/BOOTSTRAP.md" ]; then
+            claude --session-id "$sid" --fork-session $perms --chrome "${args[@]+"${args[@]}"}"
+        else
+            claude $perms --chrome "${args[@]+"${args[@]}"}"
+        fi
     fi
 }
 
@@ -494,14 +578,78 @@ do_migrate() {
     echo "  Run 'igloo start' to launch."
 }
 
+# ── Connect (set up another account to use this igloo) ────────────────────────
+
+do_connect() {
+    local target_user="${1:-}"
+    if [ -z "$target_user" ]; then
+        banner
+        echo "Usage: igloo connect <username>"
+        echo ""
+        echo "  Grant another macOS user access to this igloo."
+        echo "  Run this from the igloo account."
+        echo ""
+        echo "  Example: igloo connect azhar"
+        exit 1
+    fi
+
+    local target_home="/Users/$target_user"
+    if [ ! -d "$target_home" ]; then
+        echo "Error: user '$target_user' not found (no $target_home)"
+        exit 1
+    fi
+
+    banner
+    echo "Setting up $target_user to use igloo"
+    echo ""
+
+    # 1. Grant write access to IGLOO_HOME
+    echo "  Granting group-write on $IGLOO_HOME..."
+    chmod -R g+w "$IGLOO_HOME" 2>/dev/null && echo "  [ok] Write permissions set" || {
+        echo "  [!!] Could not set permissions (try with sudo):"
+        echo "       sudo chmod -R g+w $IGLOO_HOME"
+    }
+
+    # 2. Symlink igloo CLI into target user's ~/.local/bin
+    local bin_dir="$target_home/.local/bin"
+    mkdir -p "$bin_dir" 2>/dev/null || true
+    if [ -L "$bin_dir/igloo" ]; then
+        echo "  [ok] $bin_dir/igloo (already linked)"
+    elif [ -e "$bin_dir/igloo" ]; then
+        echo "  [!!] $bin_dir/igloo already exists — skipping"
+    elif [ -d "$bin_dir" ]; then
+        ln -s "$CODE_DIR/igloo" "$bin_dir/igloo"
+        echo "  [ok] Symlinked → $bin_dir/igloo"
+    else
+        echo "  [!!] Could not create $bin_dir — tell $target_user to run:"
+        echo "       ln -s $CODE_DIR/igloo ~/.local/bin/igloo"
+    fi
+
+    # 3. Add IGLOO_HOME to target user's shell profile
+    local shell_rc="$target_home/.zshrc"
+    local login_shell
+    login_shell=$(basename "$(dscl . -read "/Users/$target_user" UserShell 2>/dev/null | awk '{print $2}')" 2>/dev/null || echo "zsh")
+    if [ "$login_shell" = "bash" ]; then
+        shell_rc="$target_home/.bashrc"
+    fi
+    if grep -q "IGLOO_HOME" "$shell_rc" 2>/dev/null; then
+        echo "  [ok] IGLOO_HOME already in $(basename "$shell_rc")"
+    elif [ -w "$shell_rc" ] || [ ! -f "$shell_rc" ]; then
+        echo "export IGLOO_HOME=$IGLOO_HOME" >> "$shell_rc"
+        echo "  [ok] Added IGLOO_HOME to $(basename "$shell_rc")"
+    else
+        echo "  [!!] Can't write to $shell_rc — tell $target_user to add:"
+        echo "       export IGLOO_HOME=$IGLOO_HOME"
+    fi
+
+    echo ""
+    echo "Done. $target_user can now open a terminal and run: igloo"
+}
+
 # ── Version ───────────────────────────────────────────────────────────────────
 
 do_version() {
-    local version="unknown"
-    if [ -f "$CODE_DIR/VERSION" ]; then
-        version=$(cat "$CODE_DIR/VERSION")
-    fi
-    echo "Igloo $version"
+    banner
     echo "  Code: $CODE_DIR"
     echo "  Home: $IGLOO_HOME"
     if [ -f "$IGLOO_HOME/.igloo-version" ]; then
@@ -521,6 +669,9 @@ case "${1:-}" in
     setup)   do_setup ;;
     upgrade) do_upgrade ;;
     migrate) do_migrate ;;
+    connect) shift; do_connect "$@" ;;
     version) do_version ;;
-    *)       usage ;;
+    help)    usage ;;
+    -h|--help) usage ;;
+    *)       do_chat "$@" ;;
 esac
