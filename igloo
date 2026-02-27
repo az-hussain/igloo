@@ -88,12 +88,18 @@ banner() {
     if [ -f "$CODE_DIR/VERSION" ]; then
         version=$(cat "$CODE_DIR/VERSION")
     fi
+    local location="${IGLOO_HOME/#$HOME/~}"
+    local cwd
+    cwd=$(pwd)
+    if [ "$cwd" != "$IGLOO_HOME" ] && [[ "$cwd" != "$IGLOO_HOME/"* ]]; then
+        location="${location} → ${cwd/#$HOME/~}"
+    fi
     cat << EOF
-        ___
-      /|_|_|\\           igloo v${version}
-     |_|_|_|_|          A Home for Claude Code
-     |_|   |_|          ${IGLOO_HOME/#$HOME/~}
-        ‾‾‾
+   ___
+ /|_|_|\\   igloo v${version}
+|_|_|_|_|  ${location}
+|_|   |_|
+   ‾‾‾
 EOF
 }
 
