@@ -27,8 +27,8 @@ The agent can edit its own personality.
 ## Quick Start
 
 ```bash
-git clone https://github.com/az-hussain/igloo.git ~/igloo
-cd ~/igloo && ./igloo
+git clone https://github.com/az-hussain/igloo.git
+cd igloo && ./igloo
 ```
 
 That's it. The first `./igloo` adds itself to your PATH, so after that you can just run `igloo` from anywhere.

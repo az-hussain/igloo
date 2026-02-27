@@ -34,10 +34,10 @@ generate_configs() {
         -e "s|__NODE_PATH__|$node_path|g" \
         "$CODE_DIR/.claude/settings.json.template" > "$IGLOO_HOME/.claude/settings.json"
 
-    # mcp/mcp-config.json (stays in CODE_DIR — it's a build artifact for the MCP server)
+    # .mcp.json — auto-discovered by Claude Code when running from IGLOO_HOME
     sed -e "s|__CODE_DIR__|$CODE_DIR|g" \
         -e "s|__NODE_PATH__|$node_path|g" \
-        "$CODE_DIR/mcp/mcp-config.json.template" > "$CODE_DIR/mcp/mcp-config.json"
+        "$CODE_DIR/mcp/.mcp.json.template" > "$IGLOO_HOME/.mcp.json"
 
     # core/TOOLS.md
     sed -e "s|__CODE_DIR__|$CODE_DIR|g" \
@@ -248,6 +248,7 @@ IDXEOF
         cat > "$IGLOO_HOME/.gitignore" << 'GIEOF'
 # Generated configs (regenerated on setup/upgrade)
 .claude/settings.json
+.mcp.json
 core/TOOLS.md
 CLAUDE.md
 
@@ -344,6 +345,7 @@ do_start() {
         local sid
         sid=$(get_session_id)
         claude --session-id "$sid" --chrome \
+            --mcp-config "$CODE_DIR/mcp/mcp-config.json" \
             "You've just been configured via the setup wizard. Read core/BOOTSTRAP.md and follow its instructions."
 
         rm -f "$IGLOO_HOME/core/BOOTSTRAP.md"
@@ -553,13 +555,13 @@ do_chat() {
         esac
     done
 
-    # Auto-detect: if not in IGLOO_HOME, default to --here
-    if [ "$here" = false ] && [ "$(pwd)" != "$IGLOO_HOME" ]; then
-        here=true
+    # Auto-detect: if outside IGLOO_HOME (not in it or any subdirectory), default to --here
+    if [ "$here" = false ]; then
+        case "$(pwd)" in
+            "$IGLOO_HOME"|"$IGLOO_HOME"/*) ;;  # inside igloo home — stay in local mode
+            *) here=true ;;
+        esac
     fi
-
-    local sid
-    sid=$(get_session_id)
 
     if [ "$here" = true ]; then
         # Remote mode: stay in current directory, inject igloo's config
@@ -603,26 +605,16 @@ do_chat() {
             --settings "$IGLOO_HOME/.claude/settings.json"
             --append-system-prompt "$sys_prompt"
         )
-        # Load MCP config if available
-        if [ -f "$remote_code_dir/mcp/mcp-config.json" ]; then
-            igloo_flags+=(--mcp-config "$remote_code_dir/mcp/mcp-config.json")
+        # Load MCP servers (not auto-discovered outside IGLOO_HOME)
+        if [ -f "$IGLOO_HOME/.mcp.json" ]; then
+            igloo_flags+=(--mcp-config "$IGLOO_HOME/.mcp.json")
         fi
 
-        if [ -n "$sid" ] && [ ! -f "$IGLOO_HOME/core/BOOTSTRAP.md" ]; then
-            claude --session-id "$sid" --fork-session $perms --chrome \
-                "${igloo_flags[@]}" "${args[@]+"${args[@]}"}"
-        else
-            claude $perms --chrome "${igloo_flags[@]}" "${args[@]+"${args[@]}"}"
-        fi
+        claude $perms --chrome "${igloo_flags[@]}" "${args[@]+"${args[@]}"}"
     else
         # Local mode: run from IGLOO_HOME (default)
         cd "$IGLOO_HOME"
-
-        if [ -n "$sid" ] && [ ! -f "$IGLOO_HOME/core/BOOTSTRAP.md" ]; then
-            claude --session-id "$sid" --fork-session $perms --chrome "${args[@]+"${args[@]}"}"
-        else
-            claude $perms --chrome "${args[@]+"${args[@]}"}"
-        fi
+        claude $perms --chrome "${args[@]+"${args[@]}"}"
     fi
 }
 

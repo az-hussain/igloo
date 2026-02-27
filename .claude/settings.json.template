@@ -13,11 +13,5 @@
       "mcp__imsg__*",
       "mcp__claude-in-chrome__*"
     ]
-  },
-  "mcpServers": {
-    "imsg": {
-      "command": "__NODE_PATH__",
-      "args": ["__CODE_DIR__/mcp/imsg-server.js"]
-    }
   }
 }
