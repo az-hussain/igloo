@@ -85,7 +85,7 @@ banner() {
     cat << EOF
         ___
       /|_|_|\\           igloo v${version}
-     |_|_|_|_|          Persistent Agent
+     |_|_|_|_|          A Home for Claude Code
      |_|   |_|          ${IGLOO_HOME/#$HOME/~}
         ‾‾‾
 EOF
