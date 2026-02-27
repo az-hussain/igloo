@@ -41,7 +41,7 @@ git commit -m "Bootstrap complete — [your name] is home"
 
 Tell your user:
 - Message you via iMessage anytime (if enabled — the listener is already running)
-- `./igloo chat` for interactive terminal sessions
+- `igloo chat` for interactive terminal sessions
 - You can set up recurring tasks and heartbeats for me to wake up for — just ask
-- `./igloo stop` and `./igloo start` to manage the daemon
+- `igloo stop` and `igloo start` to manage the daemon
 - Send `/new` via iMessage to reset the conversation

@@ -14,20 +14,21 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const IGLOO_DIR = resolve(__dirname, "..");
+const CODE_DIR = process.env.CODE_DIR || resolve(__dirname, "..");
+const IGLOO_HOME = process.env.IGLOO_HOME || CODE_DIR;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function writeFile(path, content) {
-  writeFileSync(resolve(IGLOO_DIR, path), content, "utf8");
+  writeFileSync(resolve(IGLOO_HOME, path), content, "utf8");
 }
 
 function readFile(path) {
-  return readFileSync(resolve(IGLOO_DIR, path), "utf8");
+  return readFileSync(resolve(IGLOO_HOME, path), "utf8");
 }
 
 function fileExists(path) {
-  return existsSync(resolve(IGLOO_DIR, path));
+  return existsSync(resolve(IGLOO_HOME, path));
 }
 
 function run(cmd) {
@@ -226,13 +227,13 @@ async function main() {
             toolStatus.imsg.status = "healthy";
           } else {
             p.log.warn(
-              "iMessage: still not working — enable FDA and run ./igloo restart"
+              "iMessage: still not working — enable FDA and run igloo restart"
             );
             toolStatus.imsg.status = "unhealthy";
           }
         } else {
           p.log.info(
-            "iMessage: enabled but needs FDA — grant access and run ./igloo restart"
+            "iMessage: enabled but needs FDA — grant access and run igloo restart"
           );
           toolStatus.imsg.status = "unhealthy";
         }

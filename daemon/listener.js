@@ -21,11 +21,12 @@ import crypto from "node:crypto";
 import { Cron } from "croner";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const IGLOO_DIR = resolve(__dirname, "..");
-const ALLOWED_SENDERS = resolve(IGLOO_DIR, ".claude/allowed-senders.json");
-const SESSION_ID_FILE = resolve(IGLOO_DIR, ".claude/session-id");
-const SCHEDULES_FILE = resolve(IGLOO_DIR, "core/schedules.json");
-const SCHEDULE_STATE_FILE = resolve(IGLOO_DIR, ".claude/scheduler-state.json");
+const CODE_DIR = process.env.CODE_DIR || resolve(__dirname, "..");
+const IGLOO_HOME = process.env.IGLOO_HOME || CODE_DIR;
+const ALLOWED_SENDERS = resolve(IGLOO_HOME, ".claude/allowed-senders.json");
+const SESSION_ID_FILE = resolve(IGLOO_HOME, ".claude/session-id");
+const SCHEDULES_FILE = resolve(IGLOO_HOME, "core/schedules.json");
+const SCHEDULE_STATE_FILE = resolve(IGLOO_HOME, ".claude/scheduler-state.json");
 
 const DEBOUNCE_MS = 2000; // Batch messages within 2s window
 const RECONNECT_DELAY_MS = 5000; // Wait before reconnecting on failure
@@ -73,9 +74,9 @@ function isAllowed(sender) {
 function buildContext() {
   let context = "";
   const files = [
-    resolve(IGLOO_DIR, "core/SOUL.md"),
-    resolve(IGLOO_DIR, "core/USER.md"),
-    resolve(IGLOO_DIR, "memory/MEMORY.md"),
+    resolve(IGLOO_HOME, "core/SOUL.md"),
+    resolve(IGLOO_HOME, "core/USER.md"),
+    resolve(IGLOO_HOME, "memory/MEMORY.md"),
   ];
   for (const f of files) {
     try {
@@ -178,7 +179,7 @@ function dispatch(sender, messages) {
     log(`SPAWN: claude ${isNew ? "--session-id" : "--resume"} ${sid}`);
 
     const claude = spawn("claude", args, {
-      cwd: IGLOO_DIR,
+      cwd: IGLOO_HOME,
       stdio: ["ignore", "pipe", "pipe"],
       env: cleanEnv(),
     });
@@ -238,7 +239,7 @@ function dispatchSchedule(schedule) {
 
     const startMs = Date.now();
     const claude = spawn("claude", args, {
-      cwd: IGLOO_DIR,
+      cwd: IGLOO_HOME,
       stdio: ["ignore", "pipe", "pipe"],
       env: cleanEnv(),
     });
@@ -359,7 +360,7 @@ function watchSchedules() {
 function toolEnabled(name) {
   try {
     const tools = JSON.parse(
-      readFileSync(resolve(IGLOO_DIR, ".claude/tools.json"), "utf8")
+      readFileSync(resolve(IGLOO_HOME, ".claude/tools.json"), "utf8")
     );
     return tools[name]?.enabled === true;
   } catch {

@@ -15,7 +15,7 @@
   "mcpServers": {
     "imsg": {
       "command": "node",
-      "args": ["__IGLOO_DIR__/mcp/imsg-server.js"]
+      "args": ["__CODE_DIR__/mcp/imsg-server.js"]
     }
   }
 }

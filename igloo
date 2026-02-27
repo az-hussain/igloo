@@ -1,35 +1,58 @@
 #!/bin/bash
 set -euo pipefail
 
-IGLOO_DIR="$(cd "$(dirname "$0")" && pwd)"
-LISTENER_PID_FILE="$IGLOO_DIR/daemon/listener.pid"
-SESSION_ID_FILE="$IGLOO_DIR/.claude/session-id"
+# Resolve symlinks to find the real code directory
+SOURCE="$0"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    # If SOURCE is relative, resolve it relative to the symlink's directory
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+CODE_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+IGLOO_HOME="${IGLOO_HOME:-$HOME/.igloo}"
 
-TOOLS_FILE="$IGLOO_DIR/.claude/tools.json"
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+# Copy file from CODE_DIR to IGLOO_HOME only if destination doesn't exist
+seed_file() {
+    local src="$CODE_DIR/$1"
+    local dst="$IGLOO_HOME/$2"
+    if [ ! -f "$dst" ] && [ -f "$src" ]; then
+        cp "$src" "$dst"
+    fi
+}
+
+# Generate configs from templates (shared by setup + upgrade)
+generate_configs() {
+    # .claude/settings.json
+    sed -e "s|__CODE_DIR__|$CODE_DIR|g" \
+        "$CODE_DIR/.claude/settings.json.template" > "$IGLOO_HOME/.claude/settings.json"
+
+    # mcp/mcp-config.json (stays in CODE_DIR — it's a build artifact for the MCP server)
+    sed -e "s|__CODE_DIR__|$CODE_DIR|g" \
+        "$CODE_DIR/mcp/mcp-config.json.template" > "$CODE_DIR/mcp/mcp-config.json"
+
+    # core/TOOLS.md
+    sed -e "s|__CODE_DIR__|$CODE_DIR|g" \
+        -e "s|__IGLOO_HOME__|$IGLOO_HOME|g" \
+        "$CODE_DIR/core/TOOLS.md.template" > "$IGLOO_HOME/core/TOOLS.md"
+}
 
 get_session_id() {
-    if [ -f "$SESSION_ID_FILE" ]; then
-        cat "$SESSION_ID_FILE"
+    if [ -f "$IGLOO_HOME/.claude/session-id" ]; then
+        cat "$IGLOO_HOME/.claude/session-id"
     fi
 }
 
 # Check if a tool is enabled in .claude/tools.json
 tool_enabled() {
     local tool="$1"
-    if [ -f "$TOOLS_FILE" ]; then
-        [ "$(jq -r ".$tool.enabled" "$TOOLS_FILE" 2>/dev/null)" = "true" ]
+    local tools_file="$IGLOO_HOME/.claude/tools.json"
+    if [ -f "$tools_file" ]; then
+        [ "$(jq -r ".$tool.enabled" "$tools_file" 2>/dev/null)" = "true" ]
     else
         return 1
-    fi
-}
-
-# Get tool status from .claude/tools.json
-tool_status() {
-    local tool="$1"
-    if [ -f "$TOOLS_FILE" ]; then
-        jq -r ".$tool.status // \"unknown\"" "$TOOLS_FILE" 2>/dev/null
-    else
-        echo "unknown"
     fi
 }
 
@@ -44,7 +67,7 @@ rotate_log() {
 # Build context injection string from core files (for fresh sessions)
 build_context() {
     local ctx=""
-    for f in "$IGLOO_DIR/core/SOUL.md" "$IGLOO_DIR/core/USER.md" "$IGLOO_DIR/memory/MEMORY.md"; do
+    for f in "$IGLOO_HOME/core/SOUL.md" "$IGLOO_HOME/core/USER.md" "$IGLOO_HOME/memory/MEMORY.md"; do
         if [ -f "$f" ]; then
             ctx+="$(cat "$f")"$'\n\n'
         fi
@@ -64,6 +87,9 @@ usage() {
     echo "  status    Show daemon status"
     echo "  logs      Tail daemon logs"
     echo "  chat      Start interactive Claude session (--safe for supervised mode)"
+    echo "  upgrade   Pull latest code, update configs, restart"
+    echo "  migrate   Migrate existing single-dir instance to two-dir layout"
+    echo "  version   Show version and paths"
     echo ""
 }
 
@@ -95,57 +121,112 @@ do_setup() {
         [[ $REPLY =~ ^[Yy]$ ]] || exit 1
     fi
 
-    # Create .claude directory (the only one not shipped in the repo)
-    mkdir -p "$IGLOO_DIR/.claude"
+    # Create IGLOO_HOME directory structure
+    mkdir -p "$IGLOO_HOME/.claude/skills"
+    mkdir -p "$IGLOO_HOME/core"
+    mkdir -p "$IGLOO_HOME/memory"
+    mkdir -p "$IGLOO_HOME/tasks"
+    mkdir -p "$IGLOO_HOME/workspace"
+    mkdir -p "$IGLOO_HOME/daemon"
 
-    # Install dependencies
+    # Install dependencies in CODE_DIR
     echo "Installing dependencies..."
-    (cd "$IGLOO_DIR/mcp" && npm install --silent 2>/dev/null)
-    (cd "$IGLOO_DIR/scripts" && npm install --silent 2>/dev/null)
-    (cd "$IGLOO_DIR/daemon" && npm install --silent 2>/dev/null)
+    (cd "$CODE_DIR/mcp" && npm install --silent 2>/dev/null)
+    (cd "$CODE_DIR/scripts" && npm install --silent 2>/dev/null)
+    (cd "$CODE_DIR/daemon" && npm install --silent 2>/dev/null)
+
+    # Copy CLAUDE.md (always overwrite — it's system-managed)
+    echo "Generating configuration..."
+    cp "$CODE_DIR/CLAUDE.md" "$IGLOO_HOME/CLAUDE.md"
 
     # Generate configs from templates
-    echo "Generating configuration..."
-    sed -e "s|__IGLOO_DIR__|$IGLOO_DIR|g" \
-        "$IGLOO_DIR/mcp/mcp-config.json.template" > "$IGLOO_DIR/mcp/mcp-config.json"
+    generate_configs
 
-    sed -e "s|__IGLOO_DIR__|$IGLOO_DIR|g" \
-        "$IGLOO_DIR/.claude/settings.json.template" > "$IGLOO_DIR/.claude/settings.json"
+    # Seed state files (copy-if-not-exists)
+    seed_file "core/HEARTBEAT.md.default" "core/HEARTBEAT.md"
+    seed_file "core/schedules.json.default" "core/schedules.json"
 
-    # allowed-senders.json is NOT created here — null/missing means block all.
-    # Bootstrap will create it with the user's phone number.
+    # Seed tasks and workspace index
+    if [ ! -f "$IGLOO_HOME/tasks/TASKS.md" ]; then
+        cat > "$IGLOO_HOME/tasks/TASKS.md" << 'TASKEOF'
+# Tasks
 
-    # Generate persistent session ID (all entry points share one session)
-    if [ ! -f "$IGLOO_DIR/.claude/session-id" ]; then
-        uuidgen | tr '[:upper:]' '[:lower:]' > "$IGLOO_DIR/.claude/session-id"
+## Active
+
+
+## Completed
+
+TASKEOF
     fi
 
-    cp "$IGLOO_DIR/core/TOOLS.md.example" "$IGLOO_DIR/core/TOOLS.md"
-    sed -i '' "s|\[filled by setup.sh\]|$IGLOO_DIR|g" "$IGLOO_DIR/core/TOOLS.md"
+    if [ ! -f "$IGLOO_HOME/workspace/INDEX.md" ]; then
+        cat > "$IGLOO_HOME/workspace/INDEX.md" << 'IDXEOF'
+# Workspace Index
 
-    # Init git if needed
-    if [ ! -d "$IGLOO_DIR/.git" ]; then
-        (cd "$IGLOO_DIR" && git init --quiet)
+When you create a new project folder in `workspace/`, add an entry here.
+
+| Folder | Description | Created |
+|--------|-------------|---------|
+IDXEOF
     fi
-    (cd "$IGLOO_DIR" && git add -A && git commit -m "Igloo: initial setup" --quiet 2>/dev/null || true)
+
+    # Generate persistent session ID
+    if [ ! -f "$IGLOO_HOME/.claude/session-id" ]; then
+        uuidgen | tr '[:upper:]' '[:lower:]' > "$IGLOO_HOME/.claude/session-id"
+    fi
+
+    # Store CODE_DIR reference and version
+    echo "$CODE_DIR" > "$IGLOO_HOME/.igloo-code-dir"
+    if [ -f "$CODE_DIR/VERSION" ]; then
+        cp "$CODE_DIR/VERSION" "$IGLOO_HOME/.igloo-version"
+    fi
+
+    # Init git in IGLOO_HOME if needed
+    if [ ! -d "$IGLOO_HOME/.git" ]; then
+        (cd "$IGLOO_HOME" && git init --quiet)
+
+        # Generate .gitignore for home directory
+        cat > "$IGLOO_HOME/.gitignore" << 'GIEOF'
+# Generated configs (regenerated on setup/upgrade)
+.claude/settings.json
+core/TOOLS.md
+CLAUDE.md
+
+# Runtime
+daemon/*.log
+daemon/*.log.old
+daemon/*.pid
+.claude/scheduler-state.json
+
+# System
+.igloo-code-dir
+.igloo-version
+.DS_Store
+GIEOF
+    fi
+    (cd "$IGLOO_HOME" && git add -A && git commit -m "Igloo: initial setup" --quiet 2>/dev/null || true)
+
+    # Copy BOOTSTRAP.md if it exists (triggers first-run flow)
+    seed_file "core/BOOTSTRAP.md" "core/BOOTSTRAP.md"
 
     echo ""
-    echo "  Setup complete."
+    echo "  Setup complete. Home: $IGLOO_HOME"
 }
 
 # ── Listener (background process, inherits Terminal FDA) ─────────────────────
 
 listener_stop() {
-    if [ -f "$LISTENER_PID_FILE" ]; then
+    local pid_file="$IGLOO_HOME/daemon/listener.pid"
+    if [ -f "$pid_file" ]; then
         local pid
-        pid=$(cat "$LISTENER_PID_FILE")
+        pid=$(cat "$pid_file")
         if kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null
             echo "  Listener stopped (pid $pid)"
         else
             echo "  Listener not running (stale pid)"
         fi
-        rm -f "$LISTENER_PID_FILE"
+        rm -f "$pid_file"
     else
         echo "  Listener not running"
     fi
@@ -154,18 +235,20 @@ listener_stop() {
 listener_start() {
     listener_stop 2>/dev/null
 
-    rotate_log "$IGLOO_DIR/daemon/listener.log"
+    rotate_log "$IGLOO_HOME/daemon/listener.log"
 
-    nohup node "$IGLOO_DIR/daemon/listener.js" \
-        >> "$IGLOO_DIR/daemon/listener.log" 2>&1 &
+    IGLOO_HOME="$IGLOO_HOME" CODE_DIR="$CODE_DIR" \
+        nohup node "$CODE_DIR/daemon/listener.js" \
+        >> "$IGLOO_HOME/daemon/listener.log" 2>&1 &
     local pid=$!
-    echo "$pid" > "$LISTENER_PID_FILE"
+    echo "$pid" > "$IGLOO_HOME/daemon/listener.pid"
     echo "  Listener started (pid $pid, scheduler + iMessage)"
 }
 
 listener_status() {
-    if [ -f "$LISTENER_PID_FILE" ] && kill -0 "$(cat "$LISTENER_PID_FILE")" 2>/dev/null; then
-        echo "  Listener:  running (pid $(cat "$LISTENER_PID_FILE"))"
+    local pid_file="$IGLOO_HOME/daemon/listener.pid"
+    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+        echo "  Listener:  running (pid $(cat "$pid_file"))"
     else
         echo "  Listener:  stopped"
     fi
@@ -179,32 +262,32 @@ do_stop() {
 
 do_start() {
     # Run setup if not done yet
-    if [ ! -f "$IGLOO_DIR/.claude/settings.json" ]; then
+    if [ ! -f "$IGLOO_HOME/.claude/settings.json" ]; then
         do_setup
     fi
 
     local is_bootstrap=false
 
     # First run: CLI onboarding — collect info, test tools, write configs
-    if [ -f "$IGLOO_DIR/core/BOOTSTRAP.md" ]; then
+    if [ -f "$IGLOO_HOME/core/BOOTSTRAP.md" ]; then
         is_bootstrap=true
-        node "$IGLOO_DIR/scripts/setup.js"
+        IGLOO_HOME="$IGLOO_HOME" CODE_DIR="$CODE_DIR" node "$CODE_DIR/scripts/setup.js"
     fi
 
     # Start daemons (scheduler always, iMessage if enabled by setup)
-    rotate_log "$IGLOO_DIR/daemon/listener.log"
+    rotate_log "$IGLOO_HOME/daemon/listener.log"
     listener_start
 
     # Bootstrap: first conversation with the agent (daemons already running)
     if [ "$is_bootstrap" = true ]; then
-        cd "$IGLOO_DIR"
+        cd "$IGLOO_HOME"
         local sid
         sid=$(get_session_id)
         claude --session-id "$sid" --dangerously-skip-permissions --chrome \
             "You've just been configured via the setup wizard. Read core/BOOTSTRAP.md and follow its instructions."
 
-        rm -f "$IGLOO_DIR/core/BOOTSTRAP.md"
-        (cd "$IGLOO_DIR" && git add -A && git commit -m "Bootstrap complete — removed BOOTSTRAP.md" --quiet 2>/dev/null || true)
+        rm -f "$IGLOO_HOME/core/BOOTSTRAP.md"
+        (cd "$IGLOO_HOME" && git add -A && git commit -m "Bootstrap complete — removed BOOTSTRAP.md" --quiet 2>/dev/null || true)
     fi
 }
 
@@ -213,19 +296,25 @@ do_status() {
     listener_status
     echo ""
     echo "Logs:"
-    for log in "$IGLOO_DIR/daemon/"*.log; do
+    for log in "$IGLOO_HOME/daemon/"*.log; do
         if [ -f "$log" ]; then
             echo "  $(basename "$log"): $(wc -l < "$log" | tr -d ' ') lines, $(du -h "$log" | cut -f1)"
         fi
     done
+    echo ""
+    echo "Home: $IGLOO_HOME"
+    echo "Code: $CODE_DIR"
+    if [ -f "$IGLOO_HOME/.igloo-version" ]; then
+        echo "Version: $(cat "$IGLOO_HOME/.igloo-version")"
+    fi
 }
 
 do_logs() {
-    tail -f "$IGLOO_DIR/daemon/"*.log
+    tail -f "$IGLOO_HOME/daemon/"*.log
 }
 
 do_chat() {
-    cd "$IGLOO_DIR"
+    cd "$IGLOO_HOME"
 
     # --safe flag: run without --dangerously-skip-permissions
     local perms="--dangerously-skip-permissions"
@@ -240,11 +329,183 @@ do_chat() {
 
     local sid
     sid=$(get_session_id)
-    if [ -n "$sid" ] && [ ! -f "$IGLOO_DIR/core/BOOTSTRAP.md" ]; then
+    if [ -n "$sid" ] && [ ! -f "$IGLOO_HOME/core/BOOTSTRAP.md" ]; then
         claude --session-id "$sid" --fork-session $perms --chrome "${args[@]+"${args[@]}"}"
     else
         # No session yet — start fresh interactive session
         claude $perms --chrome "${args[@]+"${args[@]}"}"
+    fi
+}
+
+# ── Upgrade ───────────────────────────────────────────────────────────────────
+
+do_upgrade() {
+    echo "Upgrading Igloo..."
+    echo ""
+
+    local old_version="unknown"
+    if [ -f "$IGLOO_HOME/.igloo-version" ]; then
+        old_version=$(cat "$IGLOO_HOME/.igloo-version")
+    fi
+
+    # Stop daemons
+    echo "Stopping daemons..."
+    listener_stop 2>/dev/null
+
+    # Pull latest code
+    echo "Pulling latest code..."
+    (cd "$CODE_DIR" && git pull --ff-only)
+
+    # Install dependencies
+    echo "Installing dependencies..."
+    (cd "$CODE_DIR/mcp" && npm install --silent 2>/dev/null)
+    (cd "$CODE_DIR/scripts" && npm install --silent 2>/dev/null)
+    (cd "$CODE_DIR/daemon" && npm install --silent 2>/dev/null)
+
+    # Copy CLAUDE.md (always overwrite)
+    cp "$CODE_DIR/CLAUDE.md" "$IGLOO_HOME/CLAUDE.md"
+
+    # Regenerate configs
+    echo "Regenerating configs..."
+    generate_configs
+
+    # Update version
+    echo "$CODE_DIR" > "$IGLOO_HOME/.igloo-code-dir"
+    if [ -f "$CODE_DIR/VERSION" ]; then
+        cp "$CODE_DIR/VERSION" "$IGLOO_HOME/.igloo-version"
+    fi
+
+    local new_version="unknown"
+    if [ -f "$CODE_DIR/VERSION" ]; then
+        new_version=$(cat "$CODE_DIR/VERSION")
+    fi
+
+    # Restart daemons
+    echo "Restarting daemons..."
+    listener_start
+
+    echo ""
+    echo "  Upgrade complete: $old_version → $new_version"
+    echo "  Home: $IGLOO_HOME"
+    echo "  Code: $CODE_DIR"
+}
+
+# ── Migrate (one-time: single-dir → two-dir) ─────────────────────────────────
+
+do_migrate() {
+    local old_dir="$CODE_DIR"
+
+    # Detect: does CODE_DIR contain agent state?
+    if [ ! -d "$old_dir/memory" ] && [ ! -f "$old_dir/core/SOUL.md" ]; then
+        echo "Nothing to migrate — no agent state found in $old_dir"
+        echo "Run 'igloo start' for a fresh setup."
+        exit 0
+    fi
+
+    if [ "$IGLOO_HOME" = "$old_dir" ]; then
+        echo "Error: IGLOO_HOME ($IGLOO_HOME) is the same as CODE_DIR ($old_dir)."
+        echo "Set IGLOO_HOME to a different path (default: ~/.igloo) before migrating."
+        exit 1
+    fi
+
+    echo "Migrating agent state from $old_dir to $IGLOO_HOME..."
+    echo ""
+
+    # Stop daemons first
+    if [ -f "$old_dir/daemon/listener.pid" ]; then
+        local pid
+        pid=$(cat "$old_dir/daemon/listener.pid")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null
+            echo "  Stopped listener (pid $pid)"
+        fi
+        rm -f "$old_dir/daemon/listener.pid"
+    fi
+
+    # Create IGLOO_HOME structure
+    mkdir -p "$IGLOO_HOME/.claude/skills"
+    mkdir -p "$IGLOO_HOME/core"
+    mkdir -p "$IGLOO_HOME/memory"
+    mkdir -p "$IGLOO_HOME/tasks"
+    mkdir -p "$IGLOO_HOME/workspace"
+    mkdir -p "$IGLOO_HOME/daemon"
+
+    # Move state directories
+    echo "  Moving .claude/ config..."
+    for f in "$old_dir/.claude/"*; do
+        [ -e "$f" ] || continue
+        local base
+        base=$(basename "$f")
+        # Skip the template file
+        [ "$base" = "settings.json.template" ] && continue
+        if [ -d "$f" ]; then
+            cp -r "$f" "$IGLOO_HOME/.claude/$base"
+        else
+            cp "$f" "$IGLOO_HOME/.claude/$base"
+        fi
+    done
+
+    echo "  Moving core/ state..."
+    for f in SOUL.md USER.md HEARTBEAT.md schedules.json TOOLS.md; do
+        if [ -f "$old_dir/core/$f" ]; then
+            cp "$old_dir/core/$f" "$IGLOO_HOME/core/$f"
+        fi
+    done
+
+    echo "  Moving memory/..."
+    if [ -d "$old_dir/memory" ]; then
+        cp -r "$old_dir/memory/"* "$IGLOO_HOME/memory/" 2>/dev/null || true
+    fi
+
+    echo "  Moving tasks/..."
+    if [ -d "$old_dir/tasks" ]; then
+        cp -r "$old_dir/tasks/"* "$IGLOO_HOME/tasks/" 2>/dev/null || true
+    fi
+
+    echo "  Moving workspace/..."
+    if [ -d "$old_dir/workspace" ]; then
+        cp -r "$old_dir/workspace/"* "$IGLOO_HOME/workspace/" 2>/dev/null || true
+    fi
+
+    echo "  Moving daemon logs..."
+    for f in "$old_dir/daemon/"*.log "$old_dir/daemon/"*.log.old; do
+        [ -f "$f" ] && cp "$f" "$IGLOO_HOME/daemon/" 2>/dev/null || true
+    done
+
+    # Clean up state from CODE_DIR
+    echo "  Cleaning up old state from code directory..."
+    rm -rf "$old_dir/.claude/session-id" "$old_dir/.claude/tools.json" \
+           "$old_dir/.claude/allowed-senders.json" "$old_dir/.claude/settings.json" \
+           "$old_dir/.claude/scheduler-state.json" "$old_dir/.claude/skills"
+    rm -f "$old_dir/core/SOUL.md" "$old_dir/core/USER.md" "$old_dir/core/TOOLS.md"
+    rm -rf "$old_dir/memory" "$old_dir/tasks" "$old_dir/workspace"
+    rm -f "$old_dir/daemon/"*.log "$old_dir/daemon/"*.log.old "$old_dir/daemon/"*.pid
+
+    # Now run normal setup to generate fresh configs and finalize
+    echo ""
+    echo "  Running setup to finalize migration..."
+    do_setup
+
+    echo ""
+    echo "  Migration complete!"
+    echo "  State: $IGLOO_HOME"
+    echo "  Code:  $CODE_DIR"
+    echo ""
+    echo "  Run 'igloo start' to launch."
+}
+
+# ── Version ───────────────────────────────────────────────────────────────────
+
+do_version() {
+    local version="unknown"
+    if [ -f "$CODE_DIR/VERSION" ]; then
+        version=$(cat "$CODE_DIR/VERSION")
+    fi
+    echo "Igloo $version"
+    echo "  Code: $CODE_DIR"
+    echo "  Home: $IGLOO_HOME"
+    if [ -f "$IGLOO_HOME/.igloo-version" ]; then
+        echo "  Installed: $(cat "$IGLOO_HOME/.igloo-version")"
     fi
 }
 
@@ -258,5 +519,8 @@ case "${1:-}" in
     logs)    do_logs ;;
     chat)    shift; do_chat "$@" ;;
     setup)   do_setup ;;
+    upgrade) do_upgrade ;;
+    migrate) do_migrate ;;
+    version) do_version ;;
     *)       usage ;;
 esac

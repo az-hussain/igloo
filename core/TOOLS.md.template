@@ -1,10 +1,11 @@
 # TOOLS.md — Local Environment
 
-*Copy this to `core/TOOLS.md` during setup. TOOLS.md is gitignored since it may contain credentials.*
+*Generated from template. Regenerated on setup/upgrade.*
 
 ## Paths
 
-- Igloo home: [filled by setup]
+- Igloo home: __IGLOO_HOME__
+- Code directory: __CODE_DIR__
 - User's home: ~
 
 ## Accounts
