@@ -31,7 +31,9 @@ git clone https://github.com/az-hussain/igloo.git ~/igloo
 cd ~/igloo && ./igloo
 ```
 
-That's it. First run triggers setup: dependency checks, an interactive wizard (your name, phone, timezone, agent name and personality), tool verification, and a bootstrap conversation where your agent introduces itself. When you're ready for background features (iMessage + cron), run `igloo start`.
+That's it. The first `./igloo` adds itself to your PATH, so after that you can just run `igloo` from anywhere.
+
+First run triggers setup: dependency checks, an interactive wizard (your name, phone, timezone, agent name and personality), tool verification, and a bootstrap conversation where your agent introduces itself. When you're ready for background features (iMessage + cron), run `igloo start`.
 
 ## What Happens Next
 
@@ -99,6 +101,22 @@ Cron-based tasks defined in `core/schedules.json`. The agent can add, remove, or
 
 Schedules start empty. You and your agent build them together.
 
+### Meetings
+
+Run `igloo meeting` to capture a meeting transcript and generate personal-assistant-quality notes:
+
+```bash
+igloo meeting
+# → prompts for meeting name
+# → opens your $EDITOR (default: nano)
+# → paste or type the transcript, save, quit
+# → Claude processes it immediately into structured notes
+```
+
+Notes land in `memory/meetings/YYYY-MM-DD/` with key takeaways, decisions, action items, and important context. Raw transcripts are archived in `transcripts/YYYY-MM-DD/`. The agent writes notes like a diligent personal assistant — detailed but high-impact, focused on what you'll care about later.
+
+Bring your own transcription tool (Otter, Whisper, manual notes) — igloo handles the analysis.
+
 ### Skills
 
 Reusable workflows saved as `.claude/skills/<name>/SKILL.md`. The agent creates these when it notices repeated patterns — or when you tell it "remember how to do X." Skills are auto-loaded when relevant and available across all sessions.
@@ -143,10 +161,13 @@ Igloo separates code (safe to `git pull`) from state (never touched by upgrades)
 │   └── TOOLS.md.template           Environment config template
 ├── daemon/
 │   └── listener.js                 iMessage listener + cron scheduler
+├── core/skills/
+│   └── process-meeting/SKILL.md    Meeting note-taking skill (seeded)
 ├── mcp/
 │   └── imsg-server.js              iMessage MCP server
 └── scripts/
-    └── setup.js                    Interactive CLI onboarding wizard
+    ├── setup.js                    Interactive CLI onboarding wizard
+    └── meeting.js                  Meeting transcript intake
 
 ~/.igloo/                           STATE — agent's home
 ├── .claude/
@@ -162,6 +183,9 @@ Igloo separates code (safe to `git pull`) from state (never touched by upgrades)
 │   ├── TOOLS.md                    Environment paths (generated)
 │   └── schedules.json              Cron schedules (agent-owned)
 ├── memory/                         Tiered memory system
+│   └── meetings/YYYY-MM-DD/        Processed meeting notes
+├── intake/                         Landing zone for new transcripts
+├── transcripts/YYYY-MM-DD/         Archived raw transcripts
 ├── tasks/                          Persistent task checklist
 ├── workspace/                      Agent project files
 └── daemon/
@@ -178,13 +202,14 @@ Files marked *agent-owned* are read and written by the agent. Files marked *gene
 | `igloo` | Start a session (in current dir, or home if already there) |
 | `igloo --home` | Force session from igloo home directory |
 | `igloo --danger` | Start session with permissions bypassed |
+| `igloo meeting` | Record a meeting transcript and generate notes |
 | `igloo start` | Setup (if needed) + start daemons + bootstrap |
 | `igloo stop` | Stop listener daemon |
 | `igloo restart` | Restart daemons |
-| `igloo status` | Show daemon status, paths, and version |
+| `igloo status` | Dashboard: daemon health, tools, schedules, recent activity |
 | `igloo logs` | Tail daemon logs |
 | `igloo upgrade` | Pull latest code, update configs, restart |
-| `igloo migrate` | Migrate single-dir layout to two-dir layout |
+| `igloo meeting` | Record and process a meeting transcript |
 | `igloo connect <user>` | Grant another macOS user access |
 | `igloo version` | Show version and paths |
 
@@ -194,9 +219,24 @@ Files marked *agent-owned* are read and written by the agent. Files marked *gene
 - **[Claude Code](https://claude.com/claude-code)** — `npm install -g @anthropic-ai/claude-code`
 - **Node.js 18+**
 - **Git**
-- **[imsg](https://github.com/steipete/imsg)** *(optional)* — `brew install steipete/tap/imsg`. Required for iMessage. The scheduler and interactive sessions work without it.
+- **[imsg](https://github.com/steipete/imsg)** *(optional)* — `brew install steipete/tap/imsg`. Only needed for iMessage features. The scheduler and interactive sessions work without it.
 
-iMessage access requires Full Disk Access for Terminal.app (System Settings → Privacy & Security → Full Disk Access).
+## iMessage Setup
+
+iMessage is optional — igloo works fine without it as a persistent agent with memory, personality, cron, and skills. If you want to text your agent:
+
+1. **Install imsg** — `brew install steipete/tap/imsg`
+2. **Grant Full Disk Access** — Terminal.app (or your terminal emulator) needs Full Disk Access to read the iMessage database (System Settings → Privacy & Security → Full Disk Access)
+3. **Run `igloo start`** — This starts the listener daemon that watches for incoming messages
+
+**Best setup: dedicated macOS user.** iMessage requires the user to be logged in, so running igloo under your main account means it stops working when you lock your screen. The cleanest approach:
+
+- Create a separate macOS user for igloo with its own Apple ID
+- Sign into iMessage on that account
+- Use Fast User Switching (System Settings → Login Window → Show fast user switching menu) to keep the igloo user logged in while you work in your main account
+- From the igloo account, run `igloo connect <your-username>` to let your main account interact with the agent
+
+This keeps the daemon running 24/7 without interfering with your main session.
 
 ## How It Works
 
@@ -212,11 +252,14 @@ iMessage access requires Full Disk Access for Terminal.app (System Settings → 
 
 ## Permissions & Security
 
-The daemon runs Claude Code with `--dangerously-skip-permissions` so the agent can operate autonomously — reading files, running commands, sending messages — without manual approval on every action. This is a conscious design choice for a daemon that runs while you're away.
+Igloo does **not** use `--dangerously-skip-permissions`. Instead, all permissions are scoped in `.claude/settings.json`:
 
-Interactive sessions (`igloo` / `igloo chat`) use scoped permissions defined in `.claude/settings.json`. You can review and tighten these at any time.
+- **File writes** — restricted to `~/.igloo/` only. The agent can freely update its own memory, tasks, and config, but can't write to arbitrary locations. In `--here` mode (running from another project), writes outside `~/.igloo/` prompt for approval.
+- **Bash** — restricted to `git *`. No arbitrary command execution.
+- **File reads, search** — unscoped (non-destructive).
+- **Web, browser, iMessage** — allowed via MCP tools and WebFetch/WebSearch.
 
-Mitigations:
+Additional safeguards:
 - **Allowed senders** — Only phone numbers in `.claude/allowed-senders.json` can trigger the agent via iMessage
 - **Git-tracked state** — All agent-owned files in `~/.igloo/` are in a git repo. You can review every change the agent makes
 - **Tool health tracking** — `.claude/tools.json` tracks tool status. If a tool fails, the agent marks it unhealthy and alerts you

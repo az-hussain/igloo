@@ -25,12 +25,18 @@ seed_file() {
 
 # Generate configs from templates (shared by setup + upgrade)
 generate_configs() {
+    local node_path
+    node_path="$(command -v node)"
+
     # .claude/settings.json
     sed -e "s|__CODE_DIR__|$CODE_DIR|g" \
+        -e "s|__IGLOO_HOME__|$IGLOO_HOME|g" \
+        -e "s|__NODE_PATH__|$node_path|g" \
         "$CODE_DIR/.claude/settings.json.template" > "$IGLOO_HOME/.claude/settings.json"
 
     # mcp/mcp-config.json (stays in CODE_DIR — it's a build artifact for the MCP server)
     sed -e "s|__CODE_DIR__|$CODE_DIR|g" \
+        -e "s|__NODE_PATH__|$node_path|g" \
         "$CODE_DIR/mcp/mcp-config.json.template" > "$CODE_DIR/mcp/mcp-config.json"
 
     # core/TOOLS.md
@@ -100,13 +106,13 @@ usage() {
     echo "  igloo --danger       Start session with permissions bypassed"
     echo ""
     echo "Commands:"
+    echo "  meeting   Record a meeting transcript and generate notes"
     echo "  start     Setup (if needed) + start daemons + bootstrap"
     echo "  stop      Stop listener daemon"
     echo "  restart   Restart daemons"
     echo "  status    Show daemon status"
     echo "  logs      Tail daemon logs"
     echo "  upgrade   Pull latest code, update configs, restart"
-    echo "  migrate   Migrate existing single-dir instance to two-dir layout"
     echo "  connect   Grant another user access (connect <username>)"
     echo "  version   Show version and paths"
     echo "  help      Show this help"
@@ -144,10 +150,12 @@ do_setup() {
     # Create IGLOO_HOME directory structure
     mkdir -p "$IGLOO_HOME/.claude/skills"
     mkdir -p "$IGLOO_HOME/core"
-    mkdir -p "$IGLOO_HOME/memory"
+    mkdir -p "$IGLOO_HOME/memory/meetings"
     mkdir -p "$IGLOO_HOME/tasks"
     mkdir -p "$IGLOO_HOME/workspace"
     mkdir -p "$IGLOO_HOME/daemon"
+    mkdir -p "$IGLOO_HOME/intake"
+    mkdir -p "$IGLOO_HOME/transcripts"
 
     # Install dependencies in CODE_DIR
     echo "Installing dependencies..."
@@ -165,6 +173,12 @@ do_setup() {
     # Seed state files (copy-if-not-exists)
     seed_file "core/HEARTBEAT.md.default" "core/HEARTBEAT.md"
     seed_file "core/schedules.json.default" "core/schedules.json"
+
+    # Seed default skills
+    if [ -d "$CODE_DIR/core/skills/process-meeting" ] && [ ! -d "$IGLOO_HOME/.claude/skills/process-meeting" ]; then
+        mkdir -p "$IGLOO_HOME/.claude/skills/process-meeting"
+        cp "$CODE_DIR/core/skills/process-meeting/SKILL.md" "$IGLOO_HOME/.claude/skills/process-meeting/SKILL.md"
+    fi
 
     # Seed tasks and workspace index
     if [ ! -f "$IGLOO_HOME/tasks/TASKS.md" ]; then
@@ -242,6 +256,7 @@ daemon/*.log
 daemon/*.log.old
 daemon/*.pid
 .claude/scheduler-state.json
+intake/.last-meeting.json
 
 # System
 .igloo-code-dir
@@ -334,24 +349,108 @@ do_start() {
         rm -f "$IGLOO_HOME/core/BOOTSTRAP.md"
         (cd "$IGLOO_HOME" && git add -A && git commit -m "Bootstrap complete — removed BOOTSTRAP.md" --quiet 2>/dev/null || true)
     fi
+
+    echo ""
+    echo "  Run 'igloo status' to check on things."
+}
+
+format_relative_time() {
+    local seconds=$1
+    if [ "$seconds" -lt 60 ]; then
+        echo "${seconds}s ago"
+    elif [ "$seconds" -lt 3600 ]; then
+        echo "$(( seconds / 60 ))m ago"
+    elif [ "$seconds" -lt 86400 ]; then
+        echo "$(( seconds / 3600 ))h ago"
+    else
+        echo "$(( seconds / 86400 ))d ago"
+    fi
 }
 
 do_status() {
     banner
-    echo "Daemons:"
-    listener_status
     echo ""
-    echo "Logs:"
-    for log in "$IGLOO_HOME/daemon/"*.log; do
-        if [ -f "$log" ]; then
-            echo "  $(basename "$log"): $(wc -l < "$log" | tr -d ' ') lines, $(du -h "$log" | cut -f1)"
+
+    # Daemon status
+    local pid_file="$IGLOO_HOME/daemon/listener.pid"
+    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+        echo "Daemon:    running (pid $(cat "$pid_file"))"
+    else
+        echo "Daemon:    stopped"
+    fi
+    echo ""
+
+    # Tools
+    local tools_file="$IGLOO_HOME/.claude/tools.json"
+    if [ -f "$tools_file" ]; then
+        echo "Tools:"
+        local keys
+        keys=$(jq -r 'keys[]' "$tools_file" 2>/dev/null)
+        if [ -n "$keys" ]; then
+            while IFS= read -r key; do
+                local enabled status
+                enabled=$(jq -r ".[\"$key\"].enabled" "$tools_file" 2>/dev/null)
+                status=$(jq -r ".[\"$key\"].status" "$tools_file" 2>/dev/null)
+                if [ "$enabled" = "true" ]; then
+                    printf "  %-12s %s\n" "$key" "$status"
+                else
+                    printf "  %-12s %s\n" "$key" "disabled"
+                fi
+            done <<< "$keys"
+        else
+            echo "  none configured"
         fi
-    done
-    echo ""
-    echo "Home: $IGLOO_HOME"
-    echo "Code: $CODE_DIR"
-    if [ -f "$IGLOO_HOME/.igloo-version" ]; then
-        echo "Version: $(cat "$IGLOO_HOME/.igloo-version")"
+        echo ""
+    fi
+
+    # Schedules
+    local schedules_file="$IGLOO_HOME/core/schedules.json"
+    local state_file="$IGLOO_HOME/.claude/scheduler-state.json"
+    if [ -f "$schedules_file" ]; then
+        local count
+        count=$(jq 'length' "$schedules_file" 2>/dev/null || echo "0")
+        if [ "$count" -gt 0 ]; then
+            echo "Schedules:"
+            local now_s
+            now_s=$(date +%s)
+            jq -r '.[] | "\(.id)\t\(.cron)\t\(.enabled)"' "$schedules_file" 2>/dev/null | while IFS=$'\t' read -r id cron enabled; do
+                local last_info="never"
+                if [ -f "$state_file" ]; then
+                    local last_ms last_status last_dur_ms
+                    last_ms=$(jq -r ".[\"$id\"].lastRunAtMs // empty" "$state_file" 2>/dev/null)
+                    if [ -n "$last_ms" ]; then
+                        last_status=$(jq -r ".[\"$id\"].lastStatus" "$state_file" 2>/dev/null)
+                        last_dur_ms=$(jq -r ".[\"$id\"].lastDurationMs" "$state_file" 2>/dev/null)
+                        local last_s=$(( last_ms / 1000 ))
+                        local ago=$(( now_s - last_s ))
+                        local dur_s=$(( last_dur_ms / 1000 ))
+                        last_info="$last_status (${dur_s}s, $(format_relative_time $ago))"
+                    fi
+                fi
+                local tag=""
+                [ "$enabled" = "false" ] && tag=" [disabled]"
+                printf "  %-18s %-20s last: %s%s\n" "$id" "$cron" "$last_info" "$tag"
+            done
+            echo ""
+        fi
+    fi
+
+    # Recent activity
+    local log_file="$IGLOO_HOME/daemon/listener.log"
+    if [ -f "$log_file" ]; then
+        local recent
+        recent=$(grep -E '(DISPATCH|CLAUDE OK|CLAUDE EXIT|SCHEDULE |SCHEDULE OK|SCHEDULE ERR|BLOCKED|LISTENER START|ERROR)' "$log_file" | tail -8)
+        if [ -n "$recent" ]; then
+            echo "Recent Activity:"
+            while IFS= read -r line; do
+                # Extract time (HH:MM) from ISO timestamp and the rest
+                local ts msg
+                ts=$(echo "$line" | cut -c12-16)
+                msg=$(echo "$line" | cut -c26-)
+                printf "  %s  %s\n" "$ts" "$msg"
+            done <<< "$recent"
+            echo ""
+        fi
     fi
 }
 
@@ -359,7 +458,72 @@ do_logs() {
     tail -f "$IGLOO_HOME/daemon/"*.log
 }
 
+do_meeting() {
+    # Ensure setup is complete
+    if [ ! -f "$IGLOO_HOME/.claude/settings.json" ]; then
+        do_setup
+    fi
+
+    # Seed skill if missing (for existing installs that haven't re-run setup)
+    if [ -d "$CODE_DIR/core/skills/process-meeting" ] && [ ! -d "$IGLOO_HOME/.claude/skills/process-meeting" ]; then
+        mkdir -p "$IGLOO_HOME/.claude/skills/process-meeting"
+        cp "$CODE_DIR/core/skills/process-meeting/SKILL.md" "$IGLOO_HOME/.claude/skills/process-meeting/SKILL.md"
+    fi
+
+    # Ensure intake dir exists
+    mkdir -p "$IGLOO_HOME/intake"
+
+    # Clean up any previous result file
+    rm -f "$IGLOO_HOME/intake/.last-meeting.json"
+
+    # Run meeting script (clack prompt + editor)
+    IGLOO_HOME="$IGLOO_HOME" node "$CODE_DIR/scripts/meeting.js" || return
+
+    # Read the result file
+    local result_file="$IGLOO_HOME/intake/.last-meeting.json"
+    if [ ! -f "$result_file" ]; then
+        echo "  No transcript to process."
+        return
+    fi
+
+    # Parse the JSON output
+    local filepath slug date_str
+    filepath=$(jq -r '.filepath' "$result_file")
+    slug=$(jq -r '.slug' "$result_file")
+    date_str=$(jq -r '.date' "$result_file")
+    rm -f "$result_file"
+
+    if [ ! -f "$filepath" ]; then
+        echo "  Transcript file not found."
+        return
+    fi
+
+    echo ""
+    echo "  Processing transcript..."
+    echo ""
+
+    # Build context and run Claude to process the transcript
+    local ctx
+    ctx=$(build_context)
+
+    cd "$IGLOO_HOME"
+    claude --print -p "${ctx}Process the meeting transcript at $filepath using the /process-meeting skill." \
+        --settings "$IGLOO_HOME/.claude/settings.json"
+
+    # Move transcript from intake to transcripts/YYYY-MM-DD/
+    local transcript_dir="$IGLOO_HOME/transcripts/$date_str"
+    mkdir -p "$transcript_dir"
+    mv "$filepath" "$transcript_dir/"
+
+    echo ""
+    echo "  Notes saved to memory/meetings/$date_str/"
+    echo "  Transcript archived to transcripts/$date_str/"
+}
+
 do_chat() {
+    banner
+    echo ""
+
     # First run: setup + bootstrap if not done yet
     if [ ! -f "$IGLOO_HOME/.claude/settings.json" ]; then
         do_setup
@@ -515,110 +679,6 @@ do_upgrade() {
     echo "  Code: $CODE_DIR"
 }
 
-# ── Migrate (one-time: single-dir → two-dir) ─────────────────────────────────
-
-do_migrate() {
-    local old_dir="$CODE_DIR"
-
-    # Detect: does CODE_DIR contain agent state?
-    if [ ! -d "$old_dir/memory" ] && [ ! -f "$old_dir/core/SOUL.md" ]; then
-        echo "Nothing to migrate — no agent state found in $old_dir"
-        echo "Run 'igloo start' for a fresh setup."
-        exit 0
-    fi
-
-    if [ "$IGLOO_HOME" = "$old_dir" ]; then
-        echo "Error: IGLOO_HOME ($IGLOO_HOME) is the same as CODE_DIR ($old_dir)."
-        echo "Set IGLOO_HOME to a different path (default: ~/.igloo) before migrating."
-        exit 1
-    fi
-
-    echo "Migrating agent state from $old_dir to $IGLOO_HOME..."
-    echo ""
-
-    # Stop daemons first
-    if [ -f "$old_dir/daemon/listener.pid" ]; then
-        local pid
-        pid=$(cat "$old_dir/daemon/listener.pid")
-        if kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null
-            echo "  Stopped listener (pid $pid)"
-        fi
-        rm -f "$old_dir/daemon/listener.pid"
-    fi
-
-    # Create IGLOO_HOME structure
-    mkdir -p "$IGLOO_HOME/.claude/skills"
-    mkdir -p "$IGLOO_HOME/core"
-    mkdir -p "$IGLOO_HOME/memory"
-    mkdir -p "$IGLOO_HOME/tasks"
-    mkdir -p "$IGLOO_HOME/workspace"
-    mkdir -p "$IGLOO_HOME/daemon"
-
-    # Move state directories
-    echo "  Moving .claude/ config..."
-    for f in "$old_dir/.claude/"*; do
-        [ -e "$f" ] || continue
-        local base
-        base=$(basename "$f")
-        # Skip the template file
-        [ "$base" = "settings.json.template" ] && continue
-        if [ -d "$f" ]; then
-            cp -r "$f" "$IGLOO_HOME/.claude/$base"
-        else
-            cp "$f" "$IGLOO_HOME/.claude/$base"
-        fi
-    done
-
-    echo "  Moving core/ state..."
-    for f in SOUL.md USER.md HEARTBEAT.md schedules.json TOOLS.md; do
-        if [ -f "$old_dir/core/$f" ]; then
-            cp "$old_dir/core/$f" "$IGLOO_HOME/core/$f"
-        fi
-    done
-
-    echo "  Moving memory/..."
-    if [ -d "$old_dir/memory" ]; then
-        cp -r "$old_dir/memory/"* "$IGLOO_HOME/memory/" 2>/dev/null || true
-    fi
-
-    echo "  Moving tasks/..."
-    if [ -d "$old_dir/tasks" ]; then
-        cp -r "$old_dir/tasks/"* "$IGLOO_HOME/tasks/" 2>/dev/null || true
-    fi
-
-    echo "  Moving workspace/..."
-    if [ -d "$old_dir/workspace" ]; then
-        cp -r "$old_dir/workspace/"* "$IGLOO_HOME/workspace/" 2>/dev/null || true
-    fi
-
-    echo "  Moving daemon logs..."
-    for f in "$old_dir/daemon/"*.log "$old_dir/daemon/"*.log.old; do
-        [ -f "$f" ] && cp "$f" "$IGLOO_HOME/daemon/" 2>/dev/null || true
-    done
-
-    # Clean up state from CODE_DIR
-    echo "  Cleaning up old state from code directory..."
-    rm -rf "$old_dir/.claude/session-id" "$old_dir/.claude/tools.json" \
-           "$old_dir/.claude/allowed-senders.json" "$old_dir/.claude/settings.json" \
-           "$old_dir/.claude/scheduler-state.json" "$old_dir/.claude/skills"
-    rm -f "$old_dir/core/SOUL.md" "$old_dir/core/USER.md" "$old_dir/core/TOOLS.md"
-    rm -rf "$old_dir/memory" "$old_dir/tasks" "$old_dir/workspace"
-    rm -f "$old_dir/daemon/"*.log "$old_dir/daemon/"*.log.old "$old_dir/daemon/"*.pid
-
-    # Now run normal setup to generate fresh configs and finalize
-    echo ""
-    echo "  Running setup to finalize migration..."
-    do_setup
-
-    echo ""
-    echo "  Migration complete!"
-    echo "  State: $IGLOO_HOME"
-    echo "  Code:  $CODE_DIR"
-    echo ""
-    echo "  Run 'igloo start' to launch."
-}
-
 # ── Connect (set up another account to use this igloo) ────────────────────────
 
 do_connect() {
@@ -681,10 +741,10 @@ case "${1:-}" in
     restart) do_stop; sleep 1; do_start ;;
     status)  do_status ;;
     logs)    do_logs ;;
+    meeting) do_meeting ;;
     chat)    shift; do_chat "$@" ;;
     setup)   do_setup ;;
     upgrade) do_upgrade ;;
-    migrate) do_migrate ;;
     connect) shift; do_connect "$@" ;;
     version) do_version ;;
     help)    usage ;;

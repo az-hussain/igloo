@@ -163,7 +163,7 @@ function dispatch(sender, messages) {
 
     log(`DISPATCH: ${sender} (${messages.length} msg) — ${text.slice(0, 80)}`);
 
-    const args = ["--print", "--dangerously-skip-permissions", "--chrome"];
+    const args = ["--print", "--chrome"];
 
     const { id: sid, isNew } = getOrCreateSessionId();
     let fullPrompt = prompt;
@@ -228,7 +228,7 @@ function dispatchSchedule(schedule) {
 
     log(`SCHEDULE [${schedule.id}]: ${schedule.name}`);
 
-    const args = ["--print", "--dangerously-skip-permissions", "--chrome"];
+    const args = ["--print", "--chrome"];
     const { id: sid, isNew } = getOrCreateSessionId();
     if (isNew) {
       args.push("--session-id", sid);

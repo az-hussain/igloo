@@ -1,10 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash",
+      "Bash(git *)",
+      "Bash(mkdir *)",
       "Read",
-      "Write",
-      "Edit",
+      "Edit(/__IGLOO_HOME__/**)",
+      "Write(/__IGLOO_HOME__/**)",
       "Glob",
       "Grep",
       "WebFetch",
@@ -15,7 +16,7 @@
   },
   "mcpServers": {
     "imsg": {
-      "command": "node",
+      "command": "__NODE_PATH__",
       "args": ["__CODE_DIR__/mcp/imsg-server.js"]
     }
   }

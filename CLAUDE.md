@@ -69,8 +69,19 @@ Check it on heartbeats. Update when tasks are created or completed. Move finishe
 - **`memory/MEMORY.md`** — Curated long-term knowledge. Update thoughtfully.
 - **`memory/YYYY-MM-DD.md`** — Daily activity summaries. Brief notes on what happened: topics discussed, decisions made, tasks completed. NOT transcripts — no quoting messages verbatim.
 - **`memory/topics/*.md`** — Deep dives on specific areas. Create as needed.
+- **`memory/meetings/YYYY-MM-DD/*.md`** — Processed meeting notes. Created by the `/process-meeting` skill from raw transcripts.
 
 Every few days, review recent daily files and distill important learnings into MEMORY.md or topic files. Prune daily files older than 30 days.
+
+## Meeting Transcripts
+
+Users drop meeting transcripts into `intake/` via `igloo meeting`. When processing a transcript (via the `/process-meeting` skill):
+
+1. Read the transcript from `intake/`
+2. Write detailed meeting notes to `memory/meetings/YYYY-MM-DD/slug.md`
+3. The calling script moves the raw transcript to `transcripts/YYYY-MM-DD/` after you finish
+
+The `transcripts/` folder is the permanent archive of raw transcripts. The `memory/meetings/` folder contains your processed notes — the high-value summaries.
 
 ## Skills
 

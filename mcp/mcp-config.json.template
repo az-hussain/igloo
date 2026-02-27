@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "imsg": {
-      "command": "node",
+      "command": "__NODE_PATH__",
       "args": ["__CODE_DIR__/mcp/imsg-server.js"]
     }
   }
