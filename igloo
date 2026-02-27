@@ -195,6 +195,31 @@ IDXEOF
         uuidgen | tr '[:upper:]' '[:lower:]' > "$IGLOO_HOME/.claude/session-id"
     fi
 
+    # Symlink igloo to PATH
+    local bin_dir="$HOME/.local/bin"
+    if [ -L "$bin_dir/igloo" ]; then
+        echo "  [ok] igloo already on PATH"
+    elif [ -e "$bin_dir/igloo" ]; then
+        echo "  [ok] igloo already on PATH (not a symlink)"
+    else
+        mkdir -p "$bin_dir"
+        ln -s "$CODE_DIR/igloo" "$bin_dir/igloo"
+        echo "  [ok] Symlinked igloo → $bin_dir/igloo"
+        # Ensure ~/.local/bin is on PATH
+        if ! echo "$PATH" | tr ':' '\n' | grep -q "^$bin_dir$"; then
+            local shell_rc="$HOME/.zshrc"
+            local login_shell
+            login_shell=$(basename "$(dscl . -read "/Users/$(whoami)" UserShell 2>/dev/null | awk '{print $2}')" 2>/dev/null || echo "zsh")
+            if [ "$login_shell" = "bash" ]; then
+                shell_rc="$HOME/.bashrc"
+            fi
+            if ! grep -q "$bin_dir" "$shell_rc" 2>/dev/null; then
+                echo "export PATH=\"$bin_dir:\$PATH\"" >> "$shell_rc"
+                echo "  [ok] Added $bin_dir to PATH in $(basename "$shell_rc")"
+            fi
+        fi
+    fi
+
     # Store CODE_DIR reference and version
     echo "$CODE_DIR" > "$IGLOO_HOME/.igloo-code-dir"
     if [ -f "$CODE_DIR/VERSION" ]; then
