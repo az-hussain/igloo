@@ -209,7 +209,6 @@ Files marked *agent-owned* are read and written by the agent. Files marked *gene
 | `igloo status` | Dashboard: daemon health, tools, schedules, recent activity |
 | `igloo logs` | Tail daemon logs |
 | `igloo upgrade` | Pull latest code, update configs, restart |
-| `igloo meeting` | Record and process a meeting transcript |
 | `igloo connect <user>` | Grant another macOS user access |
 | `igloo version` | Show version and paths |
 
