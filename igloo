@@ -603,42 +603,22 @@ do_connect() {
     echo "Setting up $target_user to use igloo"
     echo ""
 
-    # 1. Grant write access to IGLOO_HOME
+    # 1. Grant write access to IGLOO_HOME (igloo account owns these files)
     echo "  Granting group-write on $IGLOO_HOME..."
     chmod -R g+w "$IGLOO_HOME" 2>/dev/null && echo "  [ok] Write permissions set" || {
-        echo "  [!!] Could not set permissions (try with sudo):"
+        echo "  [!!] Could not set permissions — try:"
         echo "       sudo chmod -R g+w $IGLOO_HOME"
     }
 
-    # 2. Symlink igloo CLI into target user's ~/.local/bin
-    local bin_dir="$target_home/.local/bin"
-    if [ -L "$bin_dir/igloo" ]; then
-        echo "  [ok] $bin_dir/igloo (already linked)"
-    elif [ -e "$bin_dir/igloo" ]; then
-        echo "  [!!] $bin_dir/igloo already exists — skipping"
-    else
-        sudo -u "$target_user" mkdir -p "$bin_dir"
-        sudo -u "$target_user" ln -s "$CODE_DIR/igloo" "$bin_dir/igloo"
-        echo "  [ok] Symlinked → $bin_dir/igloo"
-    fi
-
-    # 3. Add IGLOO_HOME to target user's shell profile
-    local shell_rc="$target_home/.zshrc"
-    local login_shell
-    login_shell=$(basename "$(dscl . -read "/Users/$target_user" UserShell 2>/dev/null | awk '{print $2}')" 2>/dev/null || echo "zsh")
-    if [ "$login_shell" = "bash" ]; then
-        shell_rc="$target_home/.bashrc"
-    fi
-    if grep -q "IGLOO_HOME" "$shell_rc" 2>/dev/null; then
-        echo "  [ok] IGLOO_HOME already in $(basename "$shell_rc")"
-    else
-        sudo sh -c "echo 'export IGLOO_HOME=$IGLOO_HOME' >> $shell_rc"
-        sudo chown "$target_user" "$shell_rc"
-        echo "  [ok] Added IGLOO_HOME to $(basename "$shell_rc")"
-    fi
-
+    # 2. Output setup commands for the target user
     echo ""
-    echo "Done. $target_user can now open a terminal and run: igloo"
+    echo "  Run these on $target_user's account:"
+    echo ""
+    echo "    mkdir -p ~/.local/bin"
+    echo "    ln -s $CODE_DIR/igloo ~/.local/bin/igloo"
+    echo "    echo 'export IGLOO_HOME=$IGLOO_HOME' >> ~/.zshrc"
+    echo ""
+    echo "  Then open a new terminal and run: igloo"
 }
 
 # ── Version ───────────────────────────────────────────────────────────────────
