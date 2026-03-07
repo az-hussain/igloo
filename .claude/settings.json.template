@@ -10,7 +10,8 @@
       "Grep",
       "WebFetch",
       "WebSearch",
-      "mcp__*",
+      "mcp__imsg__*",
+      "mcp__gws__*",
       "mcp__claude-in-chrome__*"
     ]
   }
