@@ -34,15 +34,22 @@ generate_configs() {
         -e "s|__NODE_PATH__|$node_path|g" \
         "$CODE_DIR/.claude/settings.json.template" > "$IGLOO_HOME/.claude/settings.json"
 
-    # .mcp.json — auto-discovered by Claude Code when running from IGLOO_HOME
-    sed -e "s|__CODE_DIR__|$CODE_DIR|g" \
-        -e "s|__NODE_PATH__|$node_path|g" \
-        "$CODE_DIR/mcp/.mcp.json.template" > "$IGLOO_HOME/.mcp.json"
-
     # core/TOOLS.md
     sed -e "s|__CODE_DIR__|$CODE_DIR|g" \
         -e "s|__IGLOO_HOME__|$IGLOO_HOME|g" \
         "$CODE_DIR/core/TOOLS.md.template" > "$IGLOO_HOME/core/TOOLS.md"
+}
+
+# Seed .mcp.json from template (only if it doesn't exist — agent-owned after first setup)
+seed_mcp_config() {
+    if [ ! -f "$IGLOO_HOME/.mcp.json" ]; then
+        local node_path
+        node_path="$(command -v node)"
+        sed -e "s|__CODE_DIR__|$CODE_DIR|g" \
+            -e "s|__IGLOO_HOME__|$IGLOO_HOME|g" \
+            -e "s|__NODE_PATH__|$node_path|g" \
+            "$CODE_DIR/mcp/.mcp.json.template" > "$IGLOO_HOME/.mcp.json"
+    fi
 }
 
 get_session_id() {
@@ -113,14 +120,12 @@ usage() {
     echo "  igloo --danger       Start session with permissions bypassed"
     echo ""
     echo "Commands:"
-    echo "  meeting   Record a meeting transcript and generate notes"
     echo "  start     Setup (if needed) + start daemons + bootstrap"
     echo "  stop      Stop listener daemon"
     echo "  restart   Restart daemons"
     echo "  status    Show daemon status"
     echo "  logs      Tail daemon logs"
     echo "  upgrade   Pull latest code, update configs, restart"
-    echo "  connect   Grant another user access (connect <username>)"
     echo "  version   Show version and paths"
     echo "  help      Show this help"
     echo ""
@@ -157,12 +162,8 @@ do_setup() {
     # Create IGLOO_HOME directory structure
     mkdir -p "$IGLOO_HOME/.claude/skills"
     mkdir -p "$IGLOO_HOME/core"
-    mkdir -p "$IGLOO_HOME/memory/meetings"
-    mkdir -p "$IGLOO_HOME/tasks"
-    mkdir -p "$IGLOO_HOME/workspace"
+    mkdir -p "$IGLOO_HOME/memory"
     mkdir -p "$IGLOO_HOME/daemon"
-    mkdir -p "$IGLOO_HOME/intake"
-    mkdir -p "$IGLOO_HOME/transcripts"
 
     # Install dependencies in CODE_DIR
     echo "Installing dependencies..."
@@ -177,39 +178,12 @@ do_setup() {
     # Generate configs from templates
     generate_configs
 
+    # Seed .mcp.json (agent-owned — only created if missing)
+    seed_mcp_config
+
     # Seed state files (copy-if-not-exists)
     seed_file "core/HEARTBEAT.md.default" "core/HEARTBEAT.md"
     seed_file "core/schedules.json.default" "core/schedules.json"
-
-    # Seed default skills
-    if [ -d "$CODE_DIR/core/skills/process-meeting" ] && [ ! -d "$IGLOO_HOME/.claude/skills/process-meeting" ]; then
-        mkdir -p "$IGLOO_HOME/.claude/skills/process-meeting"
-        cp "$CODE_DIR/core/skills/process-meeting/SKILL.md" "$IGLOO_HOME/.claude/skills/process-meeting/SKILL.md"
-    fi
-
-    # Seed tasks and workspace index
-    if [ ! -f "$IGLOO_HOME/tasks/TASKS.md" ]; then
-        cat > "$IGLOO_HOME/tasks/TASKS.md" << 'TASKEOF'
-# Tasks
-
-## Active
-
-
-## Completed
-
-TASKEOF
-    fi
-
-    if [ ! -f "$IGLOO_HOME/workspace/INDEX.md" ]; then
-        cat > "$IGLOO_HOME/workspace/INDEX.md" << 'IDXEOF'
-# Workspace Index
-
-When you create a new project folder in `workspace/`, add an entry here.
-
-| Folder | Description | Created |
-|--------|-------------|---------|
-IDXEOF
-    fi
 
     # Generate persistent session ID
     if [ ! -f "$IGLOO_HOME/.claude/session-id" ]; then
@@ -255,7 +229,6 @@ IDXEOF
         cat > "$IGLOO_HOME/.gitignore" << 'GIEOF'
 # Generated configs (regenerated on setup/upgrade)
 .claude/settings.json
-.mcp.json
 core/TOOLS.md
 CLAUDE.md
 
@@ -264,7 +237,6 @@ daemon/*.log
 daemon/*.log.old
 daemon/*.pid
 .claude/scheduler-state.json
-intake/.last-meeting.json
 
 # System
 .igloo-code-dir
@@ -466,68 +438,6 @@ do_logs() {
     tail -f "$IGLOO_HOME/daemon/"*.log
 }
 
-do_meeting() {
-    # Ensure setup is complete
-    if [ ! -f "$IGLOO_HOME/.claude/settings.json" ]; then
-        do_setup
-    fi
-
-    # Seed skill if missing (for existing installs that haven't re-run setup)
-    if [ -d "$CODE_DIR/core/skills/process-meeting" ] && [ ! -d "$IGLOO_HOME/.claude/skills/process-meeting" ]; then
-        mkdir -p "$IGLOO_HOME/.claude/skills/process-meeting"
-        cp "$CODE_DIR/core/skills/process-meeting/SKILL.md" "$IGLOO_HOME/.claude/skills/process-meeting/SKILL.md"
-    fi
-
-    # Ensure intake dir exists
-    mkdir -p "$IGLOO_HOME/intake"
-
-    # Clean up any previous result file
-    rm -f "$IGLOO_HOME/intake/.last-meeting.json"
-
-    # Run meeting script (clack prompt + editor)
-    IGLOO_HOME="$IGLOO_HOME" node "$CODE_DIR/scripts/meeting.js" || return
-
-    # Read the result file
-    local result_file="$IGLOO_HOME/intake/.last-meeting.json"
-    if [ ! -f "$result_file" ]; then
-        echo "  No transcript to process."
-        return
-    fi
-
-    # Parse the JSON output
-    local filepath slug date_str
-    filepath=$(jq -r '.filepath' "$result_file")
-    slug=$(jq -r '.slug' "$result_file")
-    date_str=$(jq -r '.date' "$result_file")
-    rm -f "$result_file"
-
-    if [ ! -f "$filepath" ]; then
-        echo "  Transcript file not found."
-        return
-    fi
-
-    echo ""
-    echo "  Processing transcript..."
-    echo ""
-
-    # Build context and run Claude to process the transcript
-    local ctx
-    ctx=$(build_context)
-
-    cd "$IGLOO_HOME"
-    claude --print -p "${ctx}Process the meeting transcript at $filepath using the /process-meeting skill." \
-        --settings "$IGLOO_HOME/.claude/settings.json"
-
-    # Move transcript from intake to transcripts/YYYY-MM-DD/
-    local transcript_dir="$IGLOO_HOME/transcripts/$date_str"
-    mkdir -p "$transcript_dir"
-    mv "$filepath" "$transcript_dir/"
-
-    echo ""
-    echo "  Notes saved to memory/meetings/$date_str/"
-    echo "  Transcript archived to transcripts/$date_str/"
-}
-
 do_chat() {
     banner
     echo ""
@@ -577,29 +487,12 @@ do_chat() {
             remote_code_dir=$(cat "$IGLOO_HOME/.igloo-code-dir")
         fi
 
-        # Sync igloo skills into local user's .claude/skills via symlinks
-        local igloo_skills="$IGLOO_HOME/.claude/skills"
-        local local_skills="$HOME/.claude/skills"
-        if [ -d "$igloo_skills" ]; then
-            mkdir -p "$local_skills"
-            for skill_dir in "$igloo_skills"/*/; do
-                [ -d "$skill_dir" ] || continue
-                local skill_name
-                skill_name=$(basename "$skill_dir")
-                [ "$skill_name" = "skills" ] && continue
-                # Symlink if not already present
-                if [ ! -e "$local_skills/$skill_name" ]; then
-                    ln -s "$skill_dir" "$local_skills/$skill_name"
-                fi
-            done
-        fi
-
         # Build system prompt: CLAUDE.md + path remapping + preloaded context
         local sys_prompt=""
         if [ -f "$IGLOO_HOME/CLAUDE.md" ]; then
             sys_prompt+="$(cat "$IGLOO_HOME/CLAUDE.md")"$'\n\n'
         fi
-        sys_prompt+="[Igloo Remote Mode] You are running in --here mode. Your home directory is $IGLOO_HOME (not the working directory). All igloo files (memory/, core/, tasks/, workspace/) are at absolute paths under $IGLOO_HOME/. Use absolute paths when reading or writing igloo state."$'\n\n'
+        sys_prompt+="[Igloo Remote Mode] You are running in --here mode. Your home directory is $IGLOO_HOME (not the working directory). All igloo files (memory/, core/) are at absolute paths under $IGLOO_HOME/. Use absolute paths when reading or writing igloo state."$'\n\n'
         local ctx
         ctx=$(build_context)
         if [ -n "$ctx" ]; then
@@ -652,7 +545,7 @@ do_upgrade() {
     # Copy CLAUDE.md (always overwrite)
     cp "$CODE_DIR/CLAUDE.md" "$IGLOO_HOME/CLAUDE.md"
 
-    # Regenerate configs
+    # Regenerate configs (settings.json + TOOLS.md — not .mcp.json, which is agent-owned)
     echo "Regenerating configs..."
     generate_configs
 
@@ -677,49 +570,6 @@ do_upgrade() {
     echo "  Code: $CODE_DIR"
 }
 
-# ── Connect (set up another account to use this igloo) ────────────────────────
-
-do_connect() {
-    local target_user="${1:-}"
-    if [ -z "$target_user" ]; then
-        banner
-        echo "Usage: igloo connect <username>"
-        echo ""
-        echo "  Grant another macOS user access to this igloo."
-        echo "  Run this from the igloo account."
-        echo ""
-        echo "  Example: igloo connect azhar"
-        exit 1
-    fi
-
-    local target_home="/Users/$target_user"
-    if [ ! -d "$target_home" ]; then
-        echo "Error: user '$target_user' not found (no $target_home)"
-        exit 1
-    fi
-
-    banner
-    echo "Setting up $target_user to use igloo"
-    echo ""
-
-    # 1. Grant write access to IGLOO_HOME (igloo account owns these files)
-    echo "  Granting group-write on $IGLOO_HOME..."
-    chmod -R g+w "$IGLOO_HOME" 2>/dev/null && echo "  [ok] Write permissions set" || {
-        echo "  [!!] Could not set permissions — try:"
-        echo "       sudo chmod -R g+w $IGLOO_HOME"
-    }
-
-    # 2. Output setup commands for the target user
-    echo ""
-    echo "  Run these on $target_user's account:"
-    echo ""
-    echo "    mkdir -p ~/.local/bin"
-    echo "    ln -s $CODE_DIR/igloo ~/.local/bin/igloo"
-    echo "    echo 'export IGLOO_HOME=$IGLOO_HOME' >> ~/.zshrc"
-    echo ""
-    echo "  Then open a new terminal and run: igloo"
-}
-
 # ── Version ───────────────────────────────────────────────────────────────────
 
 do_version() {
@@ -739,11 +589,9 @@ case "${1:-}" in
     restart) do_stop; sleep 1; do_start ;;
     status)  do_status ;;
     logs)    do_logs ;;
-    meeting) do_meeting ;;
     chat)    shift; do_chat "$@" ;;
     setup)   do_setup ;;
     upgrade) do_upgrade ;;
-    connect) shift; do_connect "$@" ;;
     version) do_version ;;
     help)    usage ;;
     -h|--help) usage ;;

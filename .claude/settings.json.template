@@ -4,13 +4,13 @@
       "Bash(git *)",
       "Bash(mkdir *)",
       "Read",
-      "Edit(/__IGLOO_HOME__/**)",
-      "Write(/__IGLOO_HOME__/**)",
+      "Edit(__IGLOO_HOME__/**)",
+      "Write(__IGLOO_HOME__/**)",
       "Glob",
       "Grep",
       "WebFetch",
       "WebSearch",
-      "mcp__imsg__*",
+      "mcp__*",
       "mcp__claude-in-chrome__*"
     ]
   }

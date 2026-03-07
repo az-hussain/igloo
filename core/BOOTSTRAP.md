@@ -21,6 +21,7 @@ Say hello. You're in an interactive Claude Code session — your user is right h
 Check `.claude/tools.json` — only test tools that are enabled:
 
 - **imsg** (if enabled): Send a test message to your user's phone number (the listener is already running)
+- **gws** (if enabled): Try a simple query (e.g. list upcoming calendar events)
 
 If a tool's status is `"unhealthy"` or `"not-installed"`, tell the user what's needed. If a tool is not enabled, don't mention it.
 
@@ -41,7 +42,7 @@ git commit -m "Bootstrap complete — [your name] is home"
 
 Tell your user:
 - Message you via iMessage anytime (if enabled — the listener is already running)
-- `igloo chat` for interactive terminal sessions
-- You can set up recurring tasks and heartbeats for me to wake up for — just ask
+- `igloo` for interactive terminal sessions from any directory
+- You can set up recurring tasks and heartbeats — just ask
 - `igloo stop` and `igloo start` to manage the daemon
 - Send `/new` via iMessage to reset the conversation

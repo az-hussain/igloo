@@ -13,8 +13,8 @@ HEARTBEAT_ERR: <brief description of what went wrong>
 
 Examples:
 - `HEARTBEAT_OK: checked calendar, no upcoming events`
-- `HEARTBEAT_OK: reviewed tasks, sent reminder about meeting`
-- `HEARTBEAT_ERR: task check failed, connection timeout`
+- `HEARTBEAT_OK: reviewed inbox, sent reminder about meeting`
+- `HEARTBEAT_ERR: gmail check failed, connection timeout`
 
 Output ONLY this status line — no other prose or reasoning. The listener captures this for clean logging.
 

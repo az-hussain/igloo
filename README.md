@@ -18,12 +18,6 @@ Claude Code is stateless — every session starts from scratch. Igloo gives it a
 
 The agent can edit its own personality.
 
-## Demo
-
-<!-- TODO: terminal recording of `igloo start` — setup wizard + bootstrap conversation + first iMessage -->
-
-<p align="center"><em>Terminal recording coming soon — <code>igloo start</code> running the setup wizard, the agent introducing itself, and sending its first iMessage.</em></p>
-
 ## Quick Start
 
 ```bash
@@ -41,7 +35,7 @@ Once setup completes, you interact with your agent in three ways:
 
 **Message it** — Text it via iMessage from your phone. The daemon picks up messages in real-time and responds from the persistent session.
 
-**Talk to it** — Run `igloo` from any directory for an interactive conversation. It forks from the persistent session so your chat doesn't interfere with the daemon.
+**Talk to it** — Run `igloo` from any directory for an interactive conversation. It carries its full personality and memory wherever you are.
 
 **Let it work** — Scheduled tasks run on cron in the background. The agent checks things, logs what it finds, and messages you when something needs attention.
 
@@ -49,11 +43,9 @@ Once setup completes, you interact with your agent in three ways:
 
 ### Memory
 
-A tiered system, all in plain markdown:
+Plain markdown, loaded into every conversation:
 
-- **`memory/MEMORY.md`** — Hot memory, loaded into every conversation. The agent curates this over time — distilling what matters from daily activity.
-- **`memory/YYYY-MM-DD.md`** — Daily journals. Brief notes on what happened, decisions made, tasks completed. Auto-pruned after 30 days.
-- **`memory/topics/*.md`** — Deep dives on specific subjects. The agent creates these as needed.
+- **`memory/MEMORY.md`** — The agent's persistent knowledge. It curates this over time — distilling what matters from conversations and tasks.
 
 ### Personality
 
@@ -101,50 +93,26 @@ Cron-based tasks defined in `core/schedules.json`. The agent can add, remove, or
 
 Schedules start empty. You and your agent build them together.
 
-### Meetings
+### Google Workspace
 
-Run `igloo meeting` to capture a meeting transcript and generate personal-assistant-quality notes:
-
-```bash
-igloo meeting
-# → prompts for meeting name
-# → opens your $EDITOR (default: nano)
-# → paste or type the transcript, save, quit
-# → Claude processes it immediately into structured notes
-```
-
-Notes land in `memory/meetings/YYYY-MM-DD/` with key takeaways, decisions, action items, and important context. Raw transcripts are archived in `transcripts/YYYY-MM-DD/`. The agent writes notes like a diligent personal assistant — detailed but high-impact, focused on what you'll care about later.
-
-Bring your own transcription tool (Otter, Whisper, manual notes) — igloo handles the analysis.
+The agent can access Gmail, Calendar, Drive, Sheets, Docs, and any Google Workspace API via the official [`gws` CLI](https://github.com/googleworkspace/cli). This is configured as an MCP server so the agent gets structured tool access.
 
 ### Skills
 
-Reusable workflows saved as `.claude/skills/<name>/SKILL.md`. The agent creates these when it notices repeated patterns — or when you tell it "remember how to do X." Skills are auto-loaded when relevant and available across all sessions.
+Reusable workflows saved as `.claude/skills/<name>/SKILL.md`. The agent creates these when you tell it "remember how to do X" — a complex purchase flow, a deployment checklist, a reporting routine. Skills are auto-loaded when relevant and available across all sessions.
 
 ### Use It Anywhere
 
-Run `igloo` from any project directory. It auto-detects that you're outside the home directory and injects personality, memory, skills, and MCP tools into the session. You get your agent's full context while working in a different codebase.
+Run `igloo` from any project directory. It auto-detects that you're outside the home directory and injects personality, memory, skills, and MCP tools into the session.
 
 ```bash
 cd ~/my-project
 igloo    # your agent, with all its memory and personality, helping here
 ```
 
-### Sandboxed but Accessible
-
-Give igloo its own macOS user account for isolation, then connect from your main account:
-
-```bash
-# From the igloo account:
-igloo connect azhar
-
-# From your account (after following the printed instructions):
-igloo    # full personality, memory, and skills — sandboxed environment
-```
-
 ### Self-Modifying
 
-The agent has write access to its own instruction files. It can edit its personality (`SOUL.md`), adjust its behavioral guidelines (`HEARTBEAT.md`), add scheduled tasks (`schedules.json`), and even modify its own permissions (`.claude/settings.json`). Changes are tracked in git.
+The agent has write access to its own instruction files. It can edit its personality (`SOUL.md`), adjust its behavioral guidelines (`HEARTBEAT.md`), add scheduled tasks (`schedules.json`), create skills, and even add new MCP servers to `.mcp.json`. Changes are tracked in git.
 
 ## Architecture
 
@@ -161,13 +129,11 @@ Igloo separates code (safe to `git pull`) from state (never touched by upgrades)
 │   └── TOOLS.md.template           Environment config template
 ├── daemon/
 │   └── listener.js                 iMessage listener + cron scheduler
-├── core/skills/
-│   └── process-meeting/SKILL.md    Meeting note-taking skill (seeded)
 ├── mcp/
-│   └── imsg-server.js              iMessage MCP server
+│   ├── imsg-server.js              iMessage MCP server
+│   └── gws-server.js               Google Workspace MCP server
 └── scripts/
-    ├── setup.js                    Interactive CLI onboarding wizard
-    └── meeting.js                  Meeting transcript intake
+    └── setup.js                    Interactive CLI onboarding wizard
 
 ~/.igloo/                           STATE — agent's home
 ├── .claude/
@@ -176,24 +142,21 @@ Igloo separates code (safe to `git pull`) from state (never touched by upgrades)
 │   ├── allowed-senders.json        Authorized iMessage contacts
 │   ├── tools.json                  Tool health tracking
 │   └── skills/                     Agent-created skills
+├── .mcp.json                       MCP server config (agent-owned)
 ├── core/
 │   ├── SOUL.md                     Personality (agent-owned)
 │   ├── USER.md                     User context (agent-owned)
 │   ├── HEARTBEAT.md                Behavioral guidelines (agent-owned)
 │   ├── TOOLS.md                    Environment paths (generated)
 │   └── schedules.json              Cron schedules (agent-owned)
-├── memory/                         Tiered memory system
-│   └── meetings/YYYY-MM-DD/        Processed meeting notes
-├── intake/                         Landing zone for new transcripts
-├── transcripts/YYYY-MM-DD/         Archived raw transcripts
-├── tasks/                          Persistent task checklist
-├── workspace/                      Agent project files
+├── memory/
+│   └── MEMORY.md                   Persistent knowledge (agent-owned)
 └── daemon/
     ├── listener.log                Runtime logs
     └── listener.pid                Daemon PID
 ```
 
-Files marked *agent-owned* are read and written by the agent. Files marked *generated* are recreated on setup and upgrade.
+Files marked *agent-owned* are read and written by the agent. Files marked *generated* are recreated on setup and upgrade. `.mcp.json` is seeded on first setup and agent-owned after that — the agent can add new MCP servers as needed.
 
 ## Commands
 
@@ -202,14 +165,12 @@ Files marked *agent-owned* are read and written by the agent. Files marked *gene
 | `igloo` | Start a session (in current dir, or home if already there) |
 | `igloo --home` | Force session from igloo home directory |
 | `igloo --danger` | Start session with permissions bypassed |
-| `igloo meeting` | Record a meeting transcript and generate notes |
 | `igloo start` | Setup (if needed) + start daemons + bootstrap |
 | `igloo stop` | Stop listener daemon |
 | `igloo restart` | Restart daemons |
 | `igloo status` | Dashboard: daemon health, tools, schedules, recent activity |
 | `igloo logs` | Tail daemon logs |
 | `igloo upgrade` | Pull latest code, update configs, restart |
-| `igloo connect <user>` | Grant another macOS user access |
 | `igloo version` | Show version and paths |
 
 ## Requirements
@@ -218,7 +179,8 @@ Files marked *agent-owned* are read and written by the agent. Files marked *gene
 - **[Claude Code](https://claude.com/claude-code)** — `npm install -g @anthropic-ai/claude-code`
 - **Node.js 18+**
 - **Git**
-- **[imsg](https://github.com/steipete/imsg)** *(optional)* — `brew install steipete/tap/imsg`. Only needed for iMessage features. The scheduler and interactive sessions work without it.
+- **[imsg](https://github.com/steipete/imsg)** *(optional)* — `brew install steipete/tap/imsg`. Only needed for iMessage features.
+- **[gws](https://github.com/googleworkspace/cli)** *(optional)* — `npm install -g @googleworkspace/cli`. For Gmail, Calendar, Drive access.
 
 ## iMessage Setup
 
@@ -232,20 +194,17 @@ iMessage is optional — igloo works fine without it as a persistent agent with 
 
 - Create a separate macOS user for igloo with its own Apple ID
 - Sign into iMessage on that account
-- Use Fast User Switching (System Settings → Login Window → Show fast user switching menu) to keep the igloo user logged in while you work in your main account
-- From the igloo account, run `igloo connect <your-username>` to let your main account interact with the agent
-
-This keeps the daemon running 24/7 without interfering with your main session.
+- Use Fast User Switching to keep the igloo user logged in while you work in your main account
 
 ## How It Works
 
 **Serial queue** — Both iMessage and scheduled tasks feed into a single serial dispatch queue. Messages are debounced (2s window) to batch rapid texts. Each dispatch resumes the persistent Claude Code session.
 
-**Persistent session** — A UUID stored in `.claude/session-id` ties all invocations together. The daemon resumes this session; interactive `igloo` chats fork from it. The agent carries context across every interaction.
+**Persistent session** — A UUID stored in `.claude/session-id` ties all invocations together. The daemon resumes this session; interactive `igloo` chats fork from it.
 
 **Context injection** — On first dispatch, the daemon injects `SOUL.md`, `USER.md`, and `MEMORY.md` so the agent has full context. Subsequent dispatches resume from where they left off.
 
-**MCP servers** — Structured tool access via Model Context Protocol. The iMessage MCP server gives the agent typed send/read/search operations instead of raw shell commands.
+**MCP servers** — Structured tool access via Model Context Protocol. The iMessage and Google Workspace MCP servers give the agent typed operations instead of raw shell commands. The agent can add more MCP servers by editing `.mcp.json`.
 
 **Hot-reload** — The daemon watches `schedules.json` for changes. The agent can add a new scheduled task and it takes effect immediately.
 
@@ -253,26 +212,17 @@ This keeps the daemon running 24/7 without interfering with your main session.
 
 Igloo does **not** use `--dangerously-skip-permissions`. Instead, all permissions are scoped in `.claude/settings.json`:
 
-- **File writes** — restricted to `~/.igloo/` only. The agent can freely update its own memory, tasks, and config, but can't write to arbitrary locations. In `--here` mode (running from another project), writes outside `~/.igloo/` prompt for approval.
-- **Bash** — restricted to `git *`. No arbitrary command execution.
-- **File reads, search** — unscoped (non-destructive).
-- **Web, browser, iMessage** — allowed via MCP tools and WebFetch/WebSearch.
+- **File writes** — restricted to `~/.igloo/` only
+- **Bash** — restricted to `git *`. No arbitrary command execution
+- **File reads, search** — unscoped (non-destructive)
+- **MCP tools** — all MCP servers allowed via `mcp__*` wildcard
+- **Web, browser** — allowed via WebFetch/WebSearch and Chrome MCP
 
 Additional safeguards:
 - **Allowed senders** — Only phone numbers in `.claude/allowed-senders.json` can trigger the agent via iMessage
 - **Git-tracked state** — All agent-owned files in `~/.igloo/` are in a git repo. You can review every change the agent makes
 - **Tool health tracking** — `.claude/tools.json` tracks tool status. If a tool fails, the agent marks it unhealthy and alerts you
 - **Timeout guards** — Message dispatches timeout after 5 minutes, scheduled tasks after 10
-
-## Vision
-
-**Today** — Memory, personality, iMessage, cron, skills, multi-user isolation.
-
-**Next** — Quantized memory retrieval for large knowledge bases. Google Calendar and email integration via MCP. Meeting transcription from audio files.
-
-**Later** — Cross-device sync. Multi-agent households. Shared memory between agents.
-
-Igloo is an experiment in what happens when you give an AI agent a place to live.
 
 ## Contributing
 

@@ -15,6 +15,7 @@
 ## Installed Tools
 
 - `imsg` — iMessage CLI (send, read, watch messages)
+- `gws` — Google Workspace CLI (Gmail, Calendar, Drive, Sheets, Docs, and more)
 - `git` — Version control
 - `claude` — Claude Code CLI
 

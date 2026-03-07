@@ -3,6 +3,13 @@
     "imsg": {
       "command": "__NODE_PATH__",
       "args": ["__CODE_DIR__/mcp/imsg-server.js"]
+    },
+    "gws": {
+      "command": "__NODE_PATH__",
+      "args": ["__CODE_DIR__/mcp/gws-server.js"],
+      "env": {
+        "GWS_ACCOUNTS_FILE": "__IGLOO_HOME__/.claude/gws-accounts.json"
+      }
     }
   }
 }

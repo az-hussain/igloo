@@ -182,6 +182,7 @@ async function main() {
 
   const toolStatus = {
     imsg: { enabled: false, status: "not-configured" },
+    gws: { enabled: false, status: "not-configured" },
   };
 
   // iMessage
@@ -245,6 +246,142 @@ async function main() {
     p.log.warn("imsg not installed — run: brew install steipete/tap/imsg");
   }
 
+  // Google Workspace (gws) — multi-account
+  const gwsAccounts = { default: null, accounts: {} };
+  const gwsInstalled = hasCommand("gws");
+  if (gwsInstalled) {
+    const enableGws = await p.confirm({
+      message: "Enable Google Workspace? (Gmail, Calendar, Drive, and more)",
+      initialValue: true,
+    });
+
+    if (enableGws) {
+      toolStatus.gws.enabled = true;
+
+      p.log.info(
+        "You can add multiple Google accounts (e.g. personal + work).\n" +
+          "  Each account authenticates separately via OAuth."
+      );
+
+      let addMore = true;
+      let isFirst = true;
+      while (addMore) {
+        const acct = await p.group(
+          {
+            label: () =>
+              p.text({
+                message: "Account label",
+                placeholder: isFirst ? "e.g. personal" : "e.g. work",
+                validate: (v) => {
+                  if (!v?.trim()) return "Label is required";
+                  if (gwsAccounts.accounts[v.trim()])
+                    return "Label already used";
+                },
+              }),
+            email: () =>
+              p.text({
+                message: "Google account email",
+                placeholder: "you@gmail.com",
+                validate: (v) =>
+                  !v?.trim() || !v.includes("@")
+                    ? "Enter a valid email"
+                    : undefined,
+              }),
+          },
+          { onCancel }
+        );
+
+        const label = acct.label.trim();
+        const email = acct.email.trim();
+        const configDir = `${process.env.HOME}/.config/gws-${label}`;
+
+        // Test if already authenticated for this config dir
+        const authTest = run(
+          `GOOGLE_WORKSPACE_CLI_CONFIG_DIR="${configDir}" gws auth status 2>&1`
+        );
+        const alreadyAuthed =
+          authTest !== null && !authTest.includes("not authenticated");
+
+        if (alreadyAuthed) {
+          p.log.success(`${label} (${email}): already authenticated`);
+        } else {
+          p.log.info(
+            `Authenticate ${label} (${email}) — a browser window will open.`
+          );
+          p.log.info(
+            "  If you haven't run `gws auth setup` yet, do that first in a separate terminal:\n" +
+              `    GOOGLE_WORKSPACE_CLI_CONFIG_DIR="${configDir}" gws auth setup`
+          );
+
+          const doAuth = await p.confirm({
+            message: `Open browser to authenticate ${email}?`,
+            initialValue: true,
+          });
+
+          if (doAuth) {
+            const sp = p.spinner();
+            sp.start(`Authenticating ${email}...`);
+            const result = run(
+              `GOOGLE_WORKSPACE_CLI_CONFIG_DIR="${configDir}" gws auth login -s gmail,calendar,drive 2>&1`
+            );
+            if (
+              result !== null &&
+              !result.includes("error") &&
+              !result.includes("failed")
+            ) {
+              sp.stop(`${label}: authenticated`);
+            } else {
+              sp.stop(`${label}: authentication incomplete`);
+              p.log.warn(
+                `You can retry later:\n` +
+                  `  GOOGLE_WORKSPACE_CLI_CONFIG_DIR="${configDir}" gws auth login -s gmail,calendar,drive`
+              );
+            }
+          } else {
+            p.log.info(
+              `Skipped. Authenticate later:\n` +
+                `  GOOGLE_WORKSPACE_CLI_CONFIG_DIR="${configDir}" gws auth login -s gmail,calendar,drive`
+            );
+          }
+        }
+
+        gwsAccounts.accounts[label] = { email, config_dir: configDir };
+        if (isFirst) gwsAccounts.default = label;
+        isFirst = false;
+
+        addMore = await p.confirm({
+          message: "Add another Google account?",
+          initialValue: false,
+        });
+        if (p.isCancel(addMore)) addMore = false;
+      }
+
+      // If multiple accounts, let user pick default
+      const labels = Object.keys(gwsAccounts.accounts);
+      if (labels.length > 1) {
+        const defaultAcct = await p.select({
+          message: "Which account should be the default?",
+          options: labels.map((l) => ({
+            value: l,
+            label: `${l} (${gwsAccounts.accounts[l].email})`,
+          })),
+        });
+        if (!p.isCancel(defaultAcct)) {
+          gwsAccounts.default = defaultAcct;
+        }
+      }
+
+      toolStatus.gws.status = "healthy";
+    } else {
+      p.log.info("Google Workspace: disabled");
+    }
+  } else {
+    p.log.info(
+      "gws not installed — optional, for Gmail/Calendar/Drive access\n" +
+        "  Install: npm install -g @googleworkspace/cli"
+    );
+  }
+
   // ── Write everything ──────────────────────────────────────────────────
 
   const s = p.spinner();
@@ -255,6 +392,11 @@ async function main() {
 
   // tools.json
   writeFile(".claude/tools.json", JSON.stringify(toolStatus, null, 2));
+
+  // gws-accounts.json (multi-account Google Workspace config)
+  if (Object.keys(gwsAccounts.accounts).length > 0) {
+    writeFile(".claude/gws-accounts.json", JSON.stringify(gwsAccounts, null, 2));
+  }
 
   // allowed-senders.json
   writeFile(".claude/allowed-senders.json", JSON.stringify([phone], null, 2));
@@ -348,9 +490,7 @@ ${proactivityGuidance[agent.proactivity]}
 
 ## Continuity
 
-Your daily logs (\`memory/YYYY-MM-DD.md\`) are activity summaries. Your long-term memory (\`memory/MEMORY.md\`) is curated — distill what matters.
-
-The difference: daily files decay in value over time. MEMORY.md is your persistent self.
+Your memory (\`memory/MEMORY.md\`) is your persistent self. Update it when you learn something important. Keep it curated — useful facts, not transcripts.
 
 ---
 
