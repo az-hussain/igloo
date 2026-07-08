@@ -254,6 +254,16 @@ GIEOF
 }
 
 # ── Listener (background process, inherits Terminal FDA) ─────────────────────
+# If a launchd job exists (com.igloo.listener), it is the single manager:
+# start/restart delegate to launchctl kickstart so we never fork a second,
+# unmanaged copy alongside it. Stop still works by PID — the launchd job is
+# configured to stay down on clean exit (KeepAlive.SuccessfulExit=false).
+
+LAUNCHD_LABEL="com.igloo.listener"
+
+launchd_managed() {
+    launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1
+}
 
 listener_stop() {
     local pid_file="$IGLOO_HOME/daemon/listener.pid"
@@ -273,6 +283,17 @@ listener_stop() {
 }
 
 listener_start() {
+    if launchd_managed; then
+        # Reap any legacy/unmanaged copy so launchd's is the only one
+        listener_stop 2>/dev/null
+        launchctl kickstart -k "gui/$(id -u)/$LAUNCHD_LABEL"
+        sleep 1
+        local pid
+        pid=$(cat "$IGLOO_HOME/daemon/listener.pid" 2>/dev/null || echo "?")
+        echo "  Listener started via launchd ($LAUNCHD_LABEL, pid $pid)"
+        return
+    fi
+
     listener_stop 2>/dev/null
 
     rotate_log "$IGLOO_HOME/daemon/listener.log"
@@ -287,10 +308,12 @@ listener_start() {
 
 listener_status() {
     local pid_file="$IGLOO_HOME/daemon/listener.pid"
+    local via=""
+    launchd_managed && via=", launchd-managed"
     if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
-        echo "  Listener:  running (pid $(cat "$pid_file"))"
+        echo "  Listener:  running (pid $(cat "$pid_file")$via)"
     else
-        echo "  Listener:  stopped"
+        echo "  Listener:  stopped${via}"
     fi
 }
 
