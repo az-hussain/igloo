@@ -12,7 +12,8 @@
       "WebSearch",
       "mcp__imsg__*",
       "mcp__gws__*",
-      "mcp__claude-in-chrome__*"
+      "mcp__claude-in-chrome__*",
+      "mcp__claude_ai_Google_Calendar__*"
     ]
   }
 }

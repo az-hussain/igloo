@@ -28,6 +28,8 @@ const SESSION_ID_FILE = resolve(IGLOO_HOME, ".claude/session-id");
 const SCHEDULES_FILE = resolve(IGLOO_HOME, "core/schedules.json");
 const SCHEDULE_STATE_FILE = resolve(IGLOO_HOME, ".claude/scheduler-state.json");
 
+const MODEL = process.env.IGLOO_MODEL || "opus"; // resumed sessions keep their original model unless overridden
+
 const DEBOUNCE_MS = 2000; // Batch messages within 2s window
 const RECONNECT_DELAY_MS = 5000; // Wait before reconnecting on failure
 const RPC_TIMEOUT_MS = 10000; // Timeout for RPC requests
@@ -163,7 +165,7 @@ function dispatch(sender, messages) {
 
     log(`DISPATCH: ${sender} (${messages.length} msg) — ${text.slice(0, 80)}`);
 
-    const args = ["--print", "--chrome"];
+    const args = ["--print", "--chrome", "--model", MODEL];
 
     const { id: sid, isNew } = getOrCreateSessionId();
     let fullPrompt = prompt;
@@ -228,7 +230,7 @@ function dispatchSchedule(schedule) {
 
     log(`SCHEDULE [${schedule.id}]: ${schedule.name}`);
 
-    const args = ["--print", "--chrome"];
+    const args = ["--print", "--chrome", "--model", MODEL];
     const { id: sid, isNew } = getOrCreateSessionId();
     if (isNew) {
       args.push("--session-id", sid);
