@@ -3,6 +3,7 @@
     "allow": [
       "Bash(git *)",
       "Bash(mkdir *)",
+      "Bash(imsg *)",
       "Read",
       "Edit",
       "Write",
