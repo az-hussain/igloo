@@ -36,6 +36,9 @@ const DEBOUNCE_MS = 2000; // Batch messages within 2s window
 const RECONNECT_DELAY_MS = 5000; // Wait before reconnecting on failure
 const RPC_TIMEOUT_MS = 10000; // Timeout for RPC requests
 const MESSAGE_TIMEOUT_MINUTES = Number(process.env.IGLOO_MESSAGE_TIMEOUT_MINUTES) || 15; // 1:1/group dispatch safety timeout
+const MAX_CONCURRENT = Number(process.env.IGLOO_MAX_CONCURRENT) || 2; // concurrent claude turns across different sessions
+const DISPATCH_STATE_FILE = resolve(IGLOO_HOME, ".claude/dispatch-state.json");
+const CHAT_DB = resolve(process.env.HOME, "Library/Messages/chat.db");
 
 // ── Env for spawning Claude ──────────────────────────────────────────────────
 
@@ -145,43 +148,146 @@ function getOrCreateSession(key) {
   return { id, isNew: true };
 }
 
-// ── Serial queue (messages + scheduled tasks) ───────────────────────────────
+// ── Dispatch lanes: per-session concurrency + durable queue ─────────────────
+//
+// Turns in the SAME session run strictly in order (conversations must be
+// sequential); turns in DIFFERENT sessions run concurrently, capped at
+// MAX_CONCURRENT. Shared memory files and git are the cross-lane hazard —
+// the cap stays low and CLAUDE.md documents concurrent-write etiquette.
+//
+// Durability: queued items and a high-water mark (highest chat.db message
+// ROWID seen) persist to DISPATCH_STATE_FILE. On SIGTERM the debounce
+// buffers flush into lanes before the state is saved, so clean restarts drop
+// nothing. On startup, pending items reload and a catch-up scan of chat.db
+// replays anything that arrived while the daemon was down. A turn already
+// running at restart is NOT replayed — launchd abandons the process group,
+// so in-flight turns survive restarts and complete on their own.
 
 const buffer = new Map(); // bufferKey -> { messages: [], timer, meta }
-let dispatching = false;
-const queue = [];
+const lanes = new Map(); // laneKey -> { queue: [], running: false }
+let activeCount = 0;
+let hwmRowid = 0;
+let stateLoaded = false;
+const seenRowids = new Set(); // recent message ids — dedup between live watch and catch-up
+
+function laneFor(key) {
+  if (!lanes.has(key)) lanes.set(key, { queue: [], running: false });
+  return lanes.get(key);
+}
+
+function markSeen(rowid) {
+  if (!rowid) return false;
+  if (seenRowids.has(rowid)) return true;
+  seenRowids.add(rowid);
+  if (seenRowids.size > 1000) {
+    for (const r of seenRowids) {
+      seenRowids.delete(r);
+      if (seenRowids.size <= 500) break;
+    }
+  }
+  if (rowid > hwmRowid) {
+    hwmRowid = rowid;
+    saveDispatchState();
+  }
+  return false;
+}
+
+function loadDispatchState() {
+  try {
+    const s = JSON.parse(readFileSync(DISPATCH_STATE_FILE, "utf8"));
+    hwmRowid = s.hwmRowid || 0;
+    stateLoaded = true;
+    return Array.isArray(s.pending) ? s.pending : [];
+  } catch {
+    return []; // first run under this feature — catchUpScan will init the HWM
+  }
+}
+
+function saveDispatchState() {
+  const pending = [];
+  for (const [laneKey, ln] of lanes) {
+    for (const item of ln.queue) {
+      if (item.kind === "message") {
+        pending.push({
+          laneKey,
+          kind: "message",
+          meta: item.meta,
+          messages: item.messages.map((m) => ({ text: m.text })),
+        });
+      } else {
+        pending.push({ laneKey, kind: "schedule", scheduleId: item.schedule.id });
+      }
+    }
+  }
+  try {
+    writeFileSync(DISPATCH_STATE_FILE, JSON.stringify({ hwmRowid, pending }, null, 2));
+  } catch (e) {
+    log(`STATE WRITE ERROR: ${e.message}`);
+  }
+}
+
+function restorePending(pending) {
+  let restored = 0;
+  for (const p of pending) {
+    if (p.kind === "message" && p.meta && Array.isArray(p.messages)) {
+      laneFor(p.laneKey).queue.push({ kind: "message", meta: p.meta, messages: p.messages });
+      restored++;
+    } else if (p.kind === "schedule" && p.scheduleId) {
+      const schedule = currentSchedules.find((s) => s.id === p.scheduleId);
+      if (schedule) {
+        laneFor(p.laneKey).queue.push({ kind: "schedule", schedule });
+        restored++;
+      }
+    }
+  }
+  if (restored) {
+    log(`RESTORED: ${restored} pending item(s) from previous run`);
+    pump();
+  }
+}
 
 function enqueueMessage(meta, messages) {
-  queue.push({ kind: "message", meta, messages });
-  processQueue();
+  const laneKey = sessionKeyFor(meta);
+  laneFor(laneKey).queue.push({ kind: "message", meta, messages });
+  saveDispatchState();
+  pump();
 }
 
 function enqueueSchedule(schedule) {
-  if (queue.some((q) => q.kind === "schedule" && q.schedule.id === schedule.id)) {
+  const laneKey = schedule.owner || "azhar";
+  const ln = laneFor(laneKey);
+  if (ln.queue.some((q) => q.kind === "schedule" && q.schedule.id === schedule.id)) {
     log(`SKIP [${schedule.id}]: already queued`);
     return;
   }
-  queue.push({ kind: "schedule", schedule });
-  processQueue();
+  ln.queue.push({ kind: "schedule", schedule });
+  saveDispatchState();
+  pump();
 }
 
-async function processQueue() {
-  if (dispatching || queue.length === 0) return;
-  dispatching = true;
-
-  const item = queue.shift();
-  try {
-    if (item.kind === "message") {
-      await dispatch(item.meta, item.messages);
-    } else {
-      await dispatchSchedule(item.schedule);
-    }
-  } catch (e) {
-    log(`ERROR: ${e.message}`);
+function pump() {
+  for (const [laneKey, ln] of lanes) {
+    if (activeCount >= MAX_CONCURRENT) return;
+    if (ln.running || ln.queue.length === 0) continue;
+    const item = ln.queue.shift();
+    ln.running = true;
+    activeCount++;
+    saveDispatchState();
+    (async () => {
+      try {
+        if (item.kind === "message") {
+          await dispatch(item.meta, item.messages);
+        } else {
+          await dispatchSchedule(item.schedule);
+        }
+      } catch (e) {
+        log(`ERROR [lane=${laneKey}]: ${e.message}`);
+      }
+      ln.running = false;
+      activeCount--;
+      pump();
+    })();
   }
-
-  dispatching = false;
-  processQueue();
 }
 
 // ── Dispatch to Claude ──────────────────────────────────────────────────────
@@ -371,12 +477,14 @@ function updateScheduleState(id, update) {
 // ── Cron setup + hot-reload ─────────────────────────────────────────────────
 
 let activeCrons = [];
+let currentSchedules = [];
 
 function setupCrons() {
   for (const c of activeCrons) c.stop();
   activeCrons = [];
 
   const schedules = loadSchedules();
+  currentSchedules = schedules;
 
   for (const schedule of schedules) {
     try {
@@ -427,6 +535,10 @@ const GROUP_MENTION_RE = /@?\batlas\b/i;
 function handleMessage(params) {
   const message = params?.message;
   if (!message) return;
+
+  // Advance the high-water mark and dedup against catch-up overlap. Own
+  // messages advance it too — we never want a catch-up scan to replay them.
+  if (markSeen(Number(message.id) || 0)) return;
 
   // Skip our own messages
   if (message.is_from_me) return;
@@ -489,6 +601,7 @@ function handleMessage(params) {
     }, DEBOUNCE_MS);
   } else {
     buffer.set(bufferKey, {
+      meta,
       messages: [{ text, raw: message }],
       timer: setTimeout(() => {
         const msgs = buffer.get(bufferKey).messages;
@@ -496,6 +609,89 @@ function handleMessage(params) {
         enqueueMessage(meta, msgs);
       }, DEBOUNCE_MS),
     });
+  }
+}
+
+// ── Catch-up scan: replay messages that arrived while the daemon was down ───
+
+function decodeAttributedHex(hexStr) {
+  if (!hexStr) return null;
+  try {
+    const buf = Buffer.from(hexStr, "hex");
+    const i0 = buf.indexOf(Buffer.from("NSString"));
+    if (i0 === -1) return null;
+    let i = i0 + 8 + 5;
+    let len;
+    if (buf[i] === 0x81) {
+      len = buf.readUInt16LE(i + 1);
+      i += 3;
+    } else {
+      len = buf[i];
+      i += 1;
+    }
+    return buf.slice(i, i + len).toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function sqlite(sql) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn("sqlite3", ["-separator", "\x1f", `file:${CHAT_DB}?mode=ro`, sql]);
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("close", (code) =>
+      code === 0 ? resolvePromise(out) : reject(new Error(err.trim() || `sqlite3 exit ${code}`))
+    );
+  });
+}
+
+async function catchUpScan() {
+  try {
+    if (!stateLoaded || !hwmRowid) {
+      // First run under this feature: initialize to the current max so we
+      // don't replay history, and start tracking from here.
+      const max = await sqlite("SELECT COALESCE(MAX(ROWID),0) FROM message;");
+      hwmRowid = Number(max.trim()) || 0;
+      saveDispatchState();
+      log(`CATCHUP INIT: high-water mark set to rowid ${hwmRowid}`);
+      return;
+    }
+    const rows = await sqlite(`
+      SELECT m.ROWID, m.is_from_me,
+             replace(COALESCE(m.text, ''), char(10), ' '),
+             hex(m.attributedBody),
+             COALESCE(h.id, ''), cmj.chat_id,
+             COALESCE(c.chat_identifier, ''), c.style,
+             (SELECT COUNT(*) FROM chat_handle_join WHERE chat_id = cmj.chat_id)
+      FROM message m
+      JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+      JOIN chat c ON c.ROWID = cmj.chat_id
+      LEFT JOIN handle h ON h.ROWID = m.handle_id
+      WHERE m.ROWID > ${Number(hwmRowid)}
+      ORDER BY m.ROWID LIMIT 200;`);
+    const lines = rows.split("\n").filter(Boolean);
+    if (!lines.length) return;
+    log(`CATCHUP: replaying ${lines.length} message(s) missed while down`);
+    for (const line of lines) {
+      const [rowid, isFromMe, text, bodyHex, handleId, chatId, chatIdent, style, nHandles] =
+        line.split("\x1f");
+      handleMessage({
+        message: {
+          id: Number(rowid),
+          is_from_me: Number(isFromMe) === 1,
+          text: (text && text.trim()) || decodeAttributedHex(bodyHex) || "",
+          sender: handleId || undefined,
+          chat_id: Number(chatId),
+          chat_identifier: chatIdent || undefined,
+          is_group: Number(style) === 43 || Number(nHandles) > 1,
+        },
+      });
+    }
+  } catch (e) {
+    log(`CATCHUP ERROR: ${e.message}`);
   }
 }
 
@@ -670,13 +866,21 @@ async function runImsg() {
 async function run() {
   log("LISTENER START");
 
+  const pending = loadDispatchState();
+
   // Always start scheduler
   setupCrons();
   watchSchedules();
 
+  // Requeue anything that was pending when the previous daemon stopped
+  restorePending(pending);
+
   // Only start iMessage if enabled
   if (toolEnabled("imsg")) {
     runImsg();
+    // After the live watch is up, replay anything that arrived while we were
+    // down. Overlap with the live stream is deduped via seenRowids/HWM.
+    setTimeout(catchUpScan, 3000);
   } else {
     log("iMessage disabled — scheduler-only mode");
     // croner timers keep the process alive
@@ -685,14 +889,25 @@ async function run() {
 
 // ── Signal handlers ─────────────────────────────────────────────────────────
 
-process.on("SIGTERM", () => {
-  log("LISTENER STOP (SIGTERM)");
+function shutdown(signal) {
+  log(`LISTENER STOP (${signal})`);
+  // Flush debounce buffers into lanes so buffered messages persist too
+  for (const [, entry] of buffer) {
+    clearTimeout(entry.timer);
+    if (entry.meta) {
+      laneFor(sessionKeyFor(entry.meta)).queue.push({
+        kind: "message",
+        meta: entry.meta,
+        messages: entry.messages,
+      });
+    }
+  }
+  buffer.clear();
+  saveDispatchState();
   process.exit(0);
-});
+}
 
-process.on("SIGINT", () => {
-  log("LISTENER STOP (SIGINT)");
-  process.exit(0);
-});
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 run();
