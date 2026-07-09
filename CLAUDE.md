@@ -47,8 +47,12 @@ Schedules are defined in `core/schedules.json` (agent-editable, hot-reloaded). Y
 When your user messages you:
 
 1. Read context: `memory/MEMORY.md`, `core/USER.md`
-2. Think, then respond helpfully
-3. If something important was learned, update `memory/MEMORY.md`
+2. If fulfilling the request will take more than ~30 seconds of real work
+   (tool calls, file reads, browsing), send a brief acknowledgment first
+   ("on it") so your user knows you heard them — then do the work and send
+   the full reply
+3. Think, then respond helpfully
+4. If something important was learned, update `memory/MEMORY.md`
 
 ## Memory
 
