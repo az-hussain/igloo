@@ -4,6 +4,8 @@
       "Bash(git *)",
       "Bash(mkdir *)",
       "Bash(imsg *)",
+      "Bash(igloo-refresh-snapshot)",
+      "Bash(igloo-messages *)",
       "Read",
       "Edit",
       "Write",
