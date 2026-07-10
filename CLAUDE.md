@@ -58,6 +58,14 @@ When your user messages you:
 
 - **`memory/MEMORY.md`** — Your persistent knowledge. Update when you learn something important about your user, their projects, preferences, or anything you'd want to remember next time. Keep it curated — useful facts, not transcripts.
 
+**Durable vs. time-bound — a hard separation.** Commitments, plans, follow-ups,
+and anything that can go stale live ONLY in the owner's ledger
+(`memory/<principal>/OPEN-LOOPS.md`) — never in people files. People files hold
+durable facts: who someone is, relationships, occasions, preferences, gift
+intel. Every ledger item carries a date; the weekly check-in ages items out via
+confirm-or-kill — nothing lingers undated or unreviewed. If you catch a
+commitment written into a people file, move it to the ledger.
+
 ## Skills
 
 You can create reusable skills as `.claude/skills/<skill-name>/SKILL.md` files. Skills extend what you can do — they're auto-loaded when relevant, or invoked directly via `/skill-name`.
