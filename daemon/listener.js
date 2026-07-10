@@ -344,7 +344,16 @@ function dispatch(meta, messages) {
     claude.stdout.on("data", (d) => (stdout += d));
     claude.stderr.on("data", (d) => (stderr += d));
 
+    // Safety timeout: configurable via IGLOO_MESSAGE_TIMEOUT_MINUTES, default 15.
+    // Cleared on process exit — a logged TIMEOUT always means a real hang.
+    const killTimer = setTimeout(() => {
+      claude.kill("SIGTERM");
+      log(`CLAUDE TIMEOUT: killed after ${MESSAGE_TIMEOUT_MINUTES}m for ${sender}`);
+      resolvePromise();
+    }, MESSAGE_TIMEOUT_MINUTES * 60 * 1000);
+
     claude.on("close", (code) => {
+      clearTimeout(killTimer);
       if (code !== 0) {
         log(`CLAUDE EXIT ${code}: ${stderr.slice(0, 200)}`);
       } else {
@@ -354,16 +363,10 @@ function dispatch(meta, messages) {
     });
 
     claude.on("error", (err) => {
+      clearTimeout(killTimer);
       log(`CLAUDE SPAWN ERROR: ${err.message}`);
       reject(err);
     });
-
-    // Safety timeout: configurable via IGLOO_MESSAGE_TIMEOUT_MINUTES, default 15
-    setTimeout(() => {
-      claude.kill("SIGTERM");
-      log(`CLAUDE TIMEOUT: killed after ${MESSAGE_TIMEOUT_MINUTES}m for ${sender}`);
-      resolvePromise();
-    }, MESSAGE_TIMEOUT_MINUTES * 60 * 1000);
   });
 }
 
@@ -425,6 +428,7 @@ function dispatchSchedule(schedule) {
         log(`SCHEDULE OK [${schedule.id}]: completed (${durationMs}ms)`);
       }
 
+      clearTimeout(killTimer);
       updateScheduleState(schedule.id, {
         lastRunAtMs: startMs,
         lastDurationMs: durationMs,
@@ -434,13 +438,15 @@ function dispatchSchedule(schedule) {
     });
 
     claude.on("error", (err) => {
+      clearTimeout(killTimer);
       log(`SCHEDULE SPAWN ERROR [${schedule.id}]: ${err.message}`);
       resolvePromise();
     });
 
-    // Safety timeout: per-schedule "timeoutMinutes" field, default 10 min
+    // Safety timeout: per-schedule "timeoutMinutes" field, default 10 min.
+    // Cleared on process exit — a logged TIMEOUT always means a real hang.
     const timeoutMinutes = schedule.timeoutMinutes || 10;
-    setTimeout(() => {
+    const killTimer = setTimeout(() => {
       claude.kill("SIGTERM");
       log(`SCHEDULE TIMEOUT [${schedule.id}]: killed after ${timeoutMinutes}m`);
       resolvePromise();
