@@ -15,7 +15,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
 import { watch as fsWatch } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { Cron } from "croner";
@@ -510,8 +510,20 @@ function setupCrons() {
 }
 
 function watchSchedules() {
+  // Watch the containing directory rather than the file itself. fs.watch()
+  // on a single path can silently stop firing after an atomic
+  // write-temp-then-rename save replaces the file's inode (common with
+  // editor/tool saves) — the watch stays bound to the old, now-gone inode
+  // and never reports future changes at that path again, with no error.
+  // Watching the directory and filtering by filename is immune to this,
+  // since directory watches aren't tied to any one child inode. (Found
+  // 2026-08-07: schedules.json edits stopped reloading after 2026-08-03,
+  // silently, for the rest of that daemon process's uptime.)
   let debounce = null;
-  fsWatch(SCHEDULES_FILE, () => {
+  const dir = dirname(SCHEDULES_FILE);
+  const target = basename(SCHEDULES_FILE);
+  fsWatch(dir, (eventType, filename) => {
+    if (filename && filename !== target) return;
     clearTimeout(debounce);
     debounce = setTimeout(() => {
       log("RELOAD: schedules.json changed");
